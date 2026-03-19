@@ -1,0 +1,375 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  platform_admin
+  org_admin
+  clinician
+  case_manager
+  billing
+  support
+  consumer
+}
+
+enum ConditionStatus {
+  active
+  inactive
+  resolved
+}
+
+enum AppointmentStatus {
+  scheduled
+  completed
+  canceled
+  no_show
+}
+
+enum ClaimStatus {
+  draft
+  submitted
+  accepted
+  denied
+  paid
+}
+
+enum AiActionType {
+  recovery_coach
+  journaling_assist
+  weekly_insight
+  clinical_summary
+  denial_analysis
+}
+
+model Tenant {
+  id              String           @id @default(cuid())
+  slug            String           @unique
+  name            String
+  createdAt       DateTime         @default(now())
+  organizations   Organization[]
+  users           User[]
+  consumers       Consumer[]
+  payers          Payer[]
+  promptRegistry  PromptRegistry[]
+  aiRuns          AiRun[]
+  auditLogs       AuditLog[]
+}
+
+model Organization {
+  id              String           @id @default(cuid())
+  tenantId        String
+  tenant          Tenant           @relation(fields: [tenantId], references: [id])
+  name            String
+  npi             String?
+  taxId           String?
+  memberships     Membership[]
+  appointments    Appointment[]
+  groups          GroupSession[]
+  encounters      Encounter[]
+  createdAt       DateTime         @default(now())
+}
+
+model User {
+  id              String           @id @default(cuid())
+  tenantId        String
+  tenant          Tenant           @relation(fields: [tenantId], references: [id])
+  email           String
+  fullName        String
+  role            Role
+  memberships     Membership[]
+  auditLogs       AuditLog[]
+  aiRuns          AiRun[]
+  createdAt       DateTime         @default(now())
+
+  @@unique([tenantId, email])
+}
+
+model Membership {
+  id              String           @id @default(cuid())
+  userId          String
+  organizationId  String
+  role            Role
+  user            User             @relation(fields: [userId], references: [id])
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+}
+
+model Consumer {
+  id                    String                @id @default(cuid())
+  tenantId              String
+  tenant                Tenant                @relation(fields: [tenantId], references: [id])
+  organizationId        String?
+  organization          Organization?         @relation(fields: [organizationId], references: [id])
+  firstName             String
+  lastName              String
+  dob                   DateTime?
+  traumaMode            Boolean               @default(false)
+  cognitiveAssistMode   Boolean               @default(false)
+  checkIns              DailyCheckIn[]
+  journals              JournalEntry[]
+  goals                 Goal[]
+  routines              Routine[]
+  conditions            ConsumerCondition[]
+  treatmentPlans        TreatmentPlan[]
+  medications           MedicationRecord[]
+  appointments          Appointment[]
+  encounters            Encounter[]
+  invoices              Invoice[]
+  ledgerEntries         PatientLedgerEntry[]
+  createdAt             DateTime              @default(now())
+}
+
+model DailyCheckIn {
+  id              String           @id @default(cuid())
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  mood            Int
+  cravings        Int
+  sleepHours      Float?
+  gratitude       String?
+  createdAt       DateTime         @default(now())
+}
+
+model JournalEntry {
+  id              String           @id @default(cuid())
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  title           String
+  content         String
+  aiSummary       String?
+  createdAt       DateTime         @default(now())
+}
+
+model Goal {
+  id              String           @id @default(cuid())
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  title           String
+  status          String
+  targetDate      DateTime?
+}
+
+model Routine {
+  id              String           @id @default(cuid())
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  title           String
+  frequency       String
+}
+
+model ConsumerCondition {
+  id              String           @id @default(cuid())
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  name            String
+  status          ConditionStatus
+  accommodation   String?
+  symptomScore    Int?
+  traumaTriggerProfile Json?
+}
+
+model TreatmentPlan {
+  id              String           @id @default(cuid())
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  clinicianId     String?
+  goals           Json
+  interventions   Json
+  reviewDate      DateTime?
+}
+
+model Appointment {
+  id              String           @id @default(cuid())
+  organizationId  String
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  type            String
+  status          AppointmentStatus
+  startsAt        DateTime
+  endsAt          DateTime
+  note            SessionNote?
+}
+
+model SessionNote {
+  id              String           @id @default(cuid())
+  appointmentId   String           @unique
+  appointment     Appointment      @relation(fields: [appointmentId], references: [id])
+  subjective      String
+  objective       String
+  assessment      String
+  plan            String
+}
+
+model GroupSession {
+  id              String           @id @default(cuid())
+  organizationId  String
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  name            String
+  topic           String
+  startsAt        DateTime
+  endsAt          DateTime
+}
+
+model MedicationRecord {
+  id              String           @id @default(cuid())
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  medicationName  String
+  dosage          String?
+  schedule        String?
+}
+
+model Payer {
+  id              String           @id @default(cuid())
+  tenantId        String
+  tenant          Tenant           @relation(fields: [tenantId], references: [id])
+  name            String
+  plans           InsurancePlan[]
+}
+
+model InsurancePlan {
+  id              String           @id @default(cuid())
+  payerId         String
+  payer           Payer            @relation(fields: [payerId], references: [id])
+  name            String
+  coverages       Coverage[]
+  feeSchedules    FeeSchedule[]
+}
+
+model Coverage {
+  id              String           @id @default(cuid())
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  planId          String
+  plan            InsurancePlan    @relation(fields: [planId], references: [id])
+  memberId        String
+  groupNumber     String?
+  isActive        Boolean          @default(true)
+}
+
+model Authorization {
+  id              String           @id @default(cuid())
+  coverageId      String
+  coverage        Coverage         @relation(fields: [coverageId], references: [id])
+  serviceType     String
+  authorizedUnits Int
+  startDate       DateTime
+  endDate         DateTime
+}
+
+model Encounter {
+  id              String           @id @default(cuid())
+  organizationId  String
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  appointmentId   String?
+  serviceCode     String
+  status          String
+  charges         Charge[]
+  claims          Claim[]
+}
+
+model Charge {
+  id              String           @id @default(cuid())
+  encounterId     String
+  encounter       Encounter        @relation(fields: [encounterId], references: [id])
+  cptCode         String
+  amountCents     Int
+}
+
+model FeeSchedule {
+  id              String           @id @default(cuid())
+  planId          String
+  plan            InsurancePlan    @relation(fields: [planId], references: [id])
+  serviceCode     String
+  rateCents       Int
+}
+
+model Claim {
+  id              String           @id @default(cuid())
+  encounterId     String
+  encounter       Encounter        @relation(fields: [encounterId], references: [id])
+  status          ClaimStatus
+  billedCents     Int
+  paidCents       Int?
+  denialReason    String?
+  remittance      Remittance?
+}
+
+model Remittance {
+  id              String           @id @default(cuid())
+  claimId         String           @unique
+  claim           Claim            @relation(fields: [claimId], references: [id])
+  amountCents     Int
+  receivedAt      DateTime
+}
+
+model Denial {
+  id              String           @id @default(cuid())
+  claimId         String
+  claim           Claim            @relation(fields: [claimId], references: [id])
+  code            String
+  reason          String
+  resolved        Boolean          @default(false)
+}
+
+model PatientLedgerEntry {
+  id              String           @id @default(cuid())
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  type            String
+  amountCents     Int
+  occurredAt      DateTime         @default(now())
+}
+
+model Invoice {
+  id              String           @id @default(cuid())
+  consumerId      String
+  consumer        Consumer         @relation(fields: [consumerId], references: [id])
+  status          String
+  totalCents      Int
+  dueDate         DateTime?
+}
+
+model PromptRegistry {
+  id              String           @id @default(cuid())
+  tenantId        String
+  tenant          Tenant           @relation(fields: [tenantId], references: [id])
+  actionType      AiActionType
+  version         String
+  promptTemplate  String
+  guardrails      Json
+  active          Boolean          @default(true)
+}
+
+model AiRun {
+  id              String           @id @default(cuid())
+  tenantId        String
+  tenant          Tenant           @relation(fields: [tenantId], references: [id])
+  userId          String?
+  user            User?            @relation(fields: [userId], references: [id])
+  actionType      AiActionType
+  inputSummary    String
+  outputSummary   String?
+  blocked         Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+}
+
+model AuditLog {
+  id              String           @id @default(cuid())
+  tenantId        String
+  tenant          Tenant           @relation(fields: [tenantId], references: [id])
+  userId          String?
+  user            User?            @relation(fields: [userId], references: [id])
+  action          String
+  entityType      String
+  entityId        String?
+  metadata        Json?
+  createdAt       DateTime         @default(now())
+}
