@@ -1,0 +1,16 @@
+.git
+.github
+.next
+node_modules
+apps/*/.next
+apps/*/dist
+packages/*/dist
+coverage
+docs
+infra/local
+aws
+awscliv2.zip
+*.log
+.env
+.env.*
+!.env.example

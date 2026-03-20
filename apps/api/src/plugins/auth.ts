@@ -16,13 +16,16 @@ export async function registerAuth(app: FastifyInstance) {
   await app.register(fastifyJwt, {
     secret: env.JWT_SECRET,
     sign: {
-      issuer: env.JWT_ISSUER,
-      audience: env.JWT_AUDIENCE,
+      iss: env.JWT_ISSUER,
       expiresIn: '8h'
+    },
+    verify: {
+      allowedIss: env.JWT_ISSUER,
+      allowedAud: env.JWT_AUDIENCE
     }
   });
 
-  app.decorateRequest('auth', null);
+  app.decorateRequest('auth', undefined);
 
   app.decorate(
     'verifyTenantRole',

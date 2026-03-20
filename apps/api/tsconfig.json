@@ -5,7 +5,11 @@
     "rootDir": "src",
     "types": ["node"],
     "module": "ESNext",
-    "moduleResolution": "Bundler"
+    "moduleResolution": "Bundler",
+    "paths": {
+      "@clarity/domain": ["packages/domain/dist/index.d.ts"],
+      "@clarity/domain/*": ["packages/domain/dist/*"]
+    }
   },
   "include": ["src/**/*.ts"]
 }

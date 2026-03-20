@@ -12,12 +12,17 @@ export async function aiRoutes(app: FastifyInstance) {
 
   app.post('/v1/ai/assist', async (request, reply) => {
     await app.verifyTenantRole(request, ['consumer', 'clinician', 'case_manager', 'billing', 'org_admin', 'platform_admin']);
+    const auth = request.auth;
     const payload = aiSchema.parse(request.body);
+
+    if (!auth) {
+      throw new Error('Authentication context was not established.');
+    }
 
     return reply.send(
       aiService.generate({
-        tenantId: request.auth.tenantId,
-        role: request.auth.role,
+        tenantId: auth.tenantId,
+        role: auth.role,
         ...payload
       })
     );

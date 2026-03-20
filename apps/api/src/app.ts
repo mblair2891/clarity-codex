@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { env } from './config/env.js';
+import { corsOrigins, env } from './config/env.js';
 import { registerAuth } from './plugins/auth.js';
 import { healthRoutes } from './routes/health.js';
 import { metaRoutes } from './routes/meta.js';
@@ -11,10 +11,23 @@ import { aiRoutes } from './routes/ai.js';
 import { AuditService } from './services/audit.service.js';
 
 export function buildApp() {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: {
+      level: env.LOG_LEVEL
+    }
+  });
   const audit = new AuditService(app.log);
 
-  app.register(cors, { origin: true });
+  app.register(cors, {
+    origin(origin, callback) {
+      if (!origin || corsOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error(`Origin ${origin} is not allowed by CORS`), false);
+    }
+  });
   app.register(registerAuth);
   app.addHook('onResponse', async (request, reply) => {
     if (request.url.startsWith('/v1')) {
