@@ -1,0 +1,120 @@
+name: Deploy Beta
+
+on:
+  push:
+    branches:
+      - beta-deploy
+  workflow_dispatch:
+
+concurrency:
+  group: beta-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: validate
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_BETA_DEPLOY_ROLE_ARN }}
+
+      - run: npm ci
+
+      - name: Prepare scripts
+        run: chmod +x scripts/bootstrap-tf-backend.sh scripts/deploy-beta.sh
+
+      - name: Bootstrap Terraform backend
+        run: |
+          while IFS= read -r line; do
+            echo "$line" >> "$GITHUB_ENV"
+          done < <(./scripts/bootstrap-tf-backend.sh)
+
+      - name: Terraform init
+        run: |
+          terraform -chdir=infra/aws init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=beta/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="dynamodb_table=${TF_LOCK_TABLE}"
+
+      - name: Terraform bootstrap ECR
+        run: |
+          terraform -chdir=infra/aws apply -auto-approve \
+            -target=aws_ecr_repository.web \
+            -target=aws_ecr_repository.api \
+            -target=aws_ecr_lifecycle_policy.web \
+            -target=aws_ecr_lifecycle_policy.api
+
+      - name: Resolve ECR repositories
+        run: |
+          echo "WEB_REPO=$(terraform -chdir=infra/aws output -raw ecr_web_repository_url)" >> "$GITHUB_ENV"
+          echo "API_REPO=$(terraform -chdir=infra/aws output -raw ecr_api_repository_url)" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=${GITHUB_SHA}" >> "$GITHUB_ENV"
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${WEB_REPO%/*}"
+
+      - name: Build and push web image
+        run: |
+          docker build -f apps/web/Dockerfile -t "${WEB_REPO}:${IMAGE_TAG}" .
+          docker push "${WEB_REPO}:${IMAGE_TAG}"
+
+      - name: Build and push api image
+        run: |
+          docker build -f apps/api/Dockerfile -t "${API_REPO}:${IMAGE_TAG}" .
+          docker push "${API_REPO}:${IMAGE_TAG}"
+
+      - name: Terraform apply beta
+        run: |
+          terraform -chdir=infra/aws apply -auto-approve \
+            -var-file=beta.tfvars.example \
+            -var="image_tag=${IMAGE_TAG}"
+
+      - name: Smoke test beta
+        run: |
+          WEB_URL="$(terraform -chdir=infra/aws output -raw web_url)"
+          API_URL="$(terraform -chdir=infra/aws output -raw api_url)"
+          curl --fail --silent --show-error "${WEB_URL}/healthz"
+          curl --fail --silent --show-error "${API_URL}/health"
