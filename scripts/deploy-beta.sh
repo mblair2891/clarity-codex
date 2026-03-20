@@ -22,7 +22,7 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-eval "$("$ROOT_DIR/scripts/bootstrap-tf-backend.sh" | sed 's/^/export /')"
+eval "$("$ROOT_DIR/scripts/bootstrap-tf-backend.sh" | grep -E '^[A-Z_][A-Z0-9_]*=' | sed 's/^/export /')"
 
 terraform -chdir="$TF_DIR" init \
   -backend-config="bucket=$TF_STATE_BUCKET" \

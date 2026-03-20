@@ -16,21 +16,21 @@ TF_LOCK_TABLE="${TF_LOCK_TABLE:-clarity-beta-tf-locks}"
 
 if ! "$AWS_CLI" s3api head-bucket --bucket "$TF_STATE_BUCKET" 2>/dev/null; then
   if [[ "$AWS_REGION" == "us-east-1" ]]; then
-    "$AWS_CLI" s3api create-bucket --bucket "$TF_STATE_BUCKET"
+    "$AWS_CLI" s3api create-bucket --bucket "$TF_STATE_BUCKET" >/dev/null
   else
     "$AWS_CLI" s3api create-bucket \
       --bucket "$TF_STATE_BUCKET" \
-      --create-bucket-configuration "LocationConstraint=$AWS_REGION"
+      --create-bucket-configuration "LocationConstraint=$AWS_REGION" >/dev/null
   fi
 fi
 
 "$AWS_CLI" s3api put-bucket-versioning \
   --bucket "$TF_STATE_BUCKET" \
-  --versioning-configuration Status=Enabled
+  --versioning-configuration Status=Enabled >/dev/null
 
 "$AWS_CLI" s3api put-bucket-encryption \
   --bucket "$TF_STATE_BUCKET" \
-  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}' >/dev/null
 
 if ! "$AWS_CLI" dynamodb describe-table --table-name "$TF_LOCK_TABLE" --region "$AWS_REGION" >/dev/null 2>&1; then
   "$AWS_CLI" dynamodb create-table \
