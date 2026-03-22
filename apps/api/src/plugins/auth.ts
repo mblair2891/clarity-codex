@@ -1,6 +1,8 @@
 import fastifyJwt from '@fastify/jwt';
+import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { env } from '../config/env.js';
+import { prisma } from '../lib/db.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -8,11 +10,13 @@ declare module 'fastify' {
       tenantId: string;
       role: string;
       userId: string;
+      organizationIds: string[];
+      consumerId: string | null;
     };
   }
 }
 
-export async function registerAuth(app: FastifyInstance) {
+async function authPlugin(app: FastifyInstance) {
   await app.register(fastifyJwt, {
     secret: env.JWT_SECRET,
     sign: {
@@ -32,20 +36,46 @@ export async function registerAuth(app: FastifyInstance) {
     async (request: FastifyRequest, requiredRoles?: string[]) => {
       const authHeader = request.headers.authorization;
       if (!authHeader) {
-        request.auth = { tenantId: 'tenant_demo', role: 'platform_admin', userId: 'demo_user' };
-        return;
+        if (env.APP_ENV === 'local') {
+          request.auth = {
+            tenantId: 'tenant_demo',
+            role: 'platform_admin',
+            userId: 'demo_user',
+            organizationIds: [],
+            consumerId: null
+          };
+          return;
+        }
+
+        const error = new Error('Authentication required.') as Error & { statusCode?: number };
+        error.statusCode = 401;
+        throw error;
       }
 
-      const decoded = await request.jwtVerify<{
-        tenantId: string;
-        role: string;
-        sub: string;
-      }>();
+      const decoded = await request.jwtVerify<{ sub: string }>();
+      const user = await prisma.user.findUnique({
+        where: { id: decoded.sub },
+        include: {
+          memberships: {
+            select: {
+              organizationId: true
+            }
+          }
+        }
+      });
+
+      if (!user || !user.isActive) {
+        const error = new Error('Authenticated user is inactive or missing.') as Error & { statusCode?: number };
+        error.statusCode = 401;
+        throw error;
+      }
 
       request.auth = {
-        tenantId: decoded.tenantId,
-        role: decoded.role,
-        userId: decoded.sub
+        tenantId: user.tenantId,
+        role: user.role,
+        userId: user.id,
+        organizationIds: user.memberships.map((membership) => membership.organizationId),
+        consumerId: user.consumerId ?? null
       };
 
       if (requiredRoles && !requiredRoles.includes(request.auth.role)) {
@@ -56,6 +86,10 @@ export async function registerAuth(app: FastifyInstance) {
     }
   );
 }
+
+export const registerAuth = fp(authPlugin, {
+  name: 'register-auth'
+});
 
 declare module 'fastify' {
   interface FastifyInstance {

@@ -1,6 +1,7 @@
 export type AppRole =
   | 'platform_admin'
   | 'org_admin'
+  | 'clinical_staff'
   | 'clinician'
   | 'case_manager'
   | 'billing'
@@ -21,13 +22,13 @@ export const navigation: NavigationItem[] = [
   {
     title: 'Recovery Hub',
     href: '/consumer',
-    roles: ['consumer', 'clinician', 'case_manager'],
+    roles: ['consumer', 'clinical_staff', 'clinician', 'case_manager'],
     description: 'Daily recovery tracking, journaling, goals, and support planning.'
   },
   {
     title: 'Clinical Command',
     href: '/clinical',
-    roles: ['clinician', 'case_manager', 'org_admin'],
+    roles: ['clinical_staff', 'clinician', 'case_manager', 'org_admin'],
     description: 'Intakes, appointments, treatment plans, groups, and chart summaries.'
   },
   {

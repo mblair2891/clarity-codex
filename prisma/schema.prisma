@@ -10,6 +10,7 @@ datasource db {
 enum Role {
   platform_admin
   org_admin
+  clinical_staff
   clinician
   case_manager
   billing
@@ -76,16 +77,21 @@ model Organization {
 }
 
 model User {
-  id          String       @id @default(cuid())
-  tenantId    String
-  tenant      Tenant       @relation(fields: [tenantId], references: [id])
-  email       String
-  fullName    String
-  role        Role
-  memberships Membership[]
-  auditLogs   AuditLog[]
-  aiRuns      AiRun[]
-  createdAt   DateTime     @default(now())
+  id                 String       @id @default(cuid())
+  tenantId           String
+  tenant             Tenant       @relation(fields: [tenantId], references: [id])
+  consumerId         String?      @unique
+  consumer           Consumer?    @relation(fields: [consumerId], references: [id])
+  email              String
+  fullName           String
+  role               Role
+  passwordHash       String?
+  isActive           Boolean      @default(true)
+  mustChangePassword Boolean      @default(false)
+  memberships        Membership[]
+  auditLogs          AuditLog[]
+  aiRuns             AiRun[]
+  createdAt          DateTime     @default(now())
 
   @@unique([tenantId, email])
 }
@@ -105,6 +111,7 @@ model Consumer {
   tenant              Tenant               @relation(fields: [tenantId], references: [id])
   organizationId      String?
   organization        Organization?        @relation(fields: [organizationId], references: [id])
+  userAccount         User?
   firstName           String
   lastName            String
   dob                 DateTime?

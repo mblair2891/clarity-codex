@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { hashPassword } from './lib/password.mjs';
 
 const prisma = new PrismaClient();
 
@@ -6,9 +7,14 @@ async function main() {
   const tenantSlug = process.env.BOOTSTRAP_TENANT_SLUG ?? 'beta-demo';
   const adminEmail = process.env.BOOTSTRAP_ADMIN_EMAIL;
   const adminName = process.env.BOOTSTRAP_ADMIN_NAME ?? 'Beta Admin';
+  const adminPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD;
 
   if (!adminEmail) {
     throw new Error('BOOTSTRAP_ADMIN_EMAIL is required.');
+  }
+
+  if (!adminPassword) {
+    throw new Error('BOOTSTRAP_ADMIN_PASSWORD is required.');
   }
 
   const tenant = await prisma.tenant.findUnique({
@@ -34,13 +40,19 @@ async function main() {
     },
     update: {
       fullName: adminName,
-      role: 'platform_admin'
+      role: 'platform_admin',
+      passwordHash: await hashPassword(adminPassword),
+      isActive: true,
+      mustChangePassword: false
     },
     create: {
       tenantId: tenant.id,
       email: adminEmail,
       fullName: adminName,
-      role: 'platform_admin'
+      role: 'platform_admin',
+      passwordHash: await hashPassword(adminPassword),
+      isActive: true,
+      mustChangePassword: false
     }
   });
 

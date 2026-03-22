@@ -2,71 +2,27 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { resolveApiBaseUrl } from '../lib/api-base-url';
-
-const tokenStorageKey = 'clarity.beta.token';
+import {
+  clearStoredToken,
+  fetchMe,
+  getApiBaseUrlState,
+  getLandingPathForRole,
+  getStoredToken,
+  loginWithBetaAccessCode,
+  loginWithPassword,
+  storeToken
+} from '../lib/beta-auth';
 
 type ValidationState = 'idle' | 'validating';
-type LoginMode = 'credentials' | 'token';
-
-type BetaLoginResponse = {
-  token: string;
-  user: {
-    email: string;
-    fullName: string;
-    role: string;
-  };
-  tenant: {
-    slug: string;
-    name: string;
-  };
-};
-
-async function validateToken(apiBaseUrl: string, token: string) {
-  const response = await fetch(`${apiBaseUrl}/v1/auth/me`, {
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error('This beta access link is invalid or expired.');
-  }
-
-  return response.json();
-}
-
-async function exchangeBetaCredentials(apiBaseUrl: string, email: string, accessCode: string): Promise<BetaLoginResponse> {
-  const response = await fetch(`${apiBaseUrl}/v1/auth/beta-login`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      email,
-      accessCode
-    })
-  });
-
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(payload?.message ?? 'Unable to sign in to the beta environment.');
-  }
-
-  return response.json();
-}
 
 export function BetaAccessClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const apiBaseUrl = resolveApiBaseUrl();
-  const apiBaseUrlError = apiBaseUrl
-    ? null
-    : 'Beta sign-in is unavailable from this hostname. Open the beta app URL directly.';
+  const { apiBaseUrl, error: apiBaseUrlError } = getApiBaseUrlState();
   const [emailInput, setEmailInput] = useState('beta-admin@claritybridgehealth.com');
+  const [passwordInput, setPasswordInput] = useState('');
   const [accessCodeInput, setAccessCodeInput] = useState('');
   const [tokenInput, setTokenInput] = useState('');
-  const [mode, setMode] = useState<LoginMode>('credentials');
   const [status, setStatus] = useState<ValidationState>('idle');
   const [error, setError] = useState<string | null>(null);
 
@@ -75,17 +31,17 @@ export function BetaAccessClient() {
       return;
     }
 
-    const existingToken = window.localStorage.getItem(tokenStorageKey);
+    const existingToken = getStoredToken();
     if (!existingToken) {
       return;
     }
 
-    validateToken(apiBaseUrl, existingToken)
-      .then(() => {
-        router.replace('/admin');
+    fetchMe(apiBaseUrl, existingToken)
+      .then((session) => {
+        router.replace(session.landingPath || getLandingPathForRole(session.user.role));
       })
       .catch(() => {
-        window.localStorage.removeItem(tokenStorageKey);
+        clearStoredToken();
       });
   }, [apiBaseUrl, router]);
 
@@ -102,18 +58,18 @@ export function BetaAccessClient() {
     setStatus('validating');
     setError(null);
 
-    validateToken(apiBaseUrl, inviteToken)
-      .then(() => {
-        window.localStorage.setItem(tokenStorageKey, inviteToken);
-        router.replace('/admin');
+    fetchMe(apiBaseUrl, inviteToken)
+      .then((session) => {
+        storeToken(inviteToken);
+        router.replace(session.landingPath || getLandingPathForRole(session.user.role));
       })
       .catch((validationError: unknown) => {
-        setError(validationError instanceof Error ? validationError.message : 'Unable to validate this beta access link.');
+        setError(validationError instanceof Error ? validationError.message : 'Unable to validate this emergency access token.');
         setStatus('idle');
       });
   }, [apiBaseUrl, router, searchParams]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handlePasswordLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setStatus('validating');
@@ -126,110 +82,84 @@ export function BetaAccessClient() {
         return;
       }
 
-      if (mode === 'credentials') {
-        const trimmedEmail = emailInput.trim().toLowerCase();
-        const trimmedAccessCode = accessCodeInput.trim();
+      const login = await loginWithPassword(apiBaseUrl, emailInput.trim().toLowerCase(), passwordInput.trim());
+      storeToken(login.token);
+      router.replace(login.landingPath || getLandingPathForRole(login.user.role));
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : 'Unable to sign in to the beta environment.');
+      setStatus('idle');
+    }
+  }
 
-        if (!trimmedEmail || !trimmedAccessCode) {
-          setError('Enter your beta email and access code to continue.');
-          setStatus('idle');
-          return;
-        }
+  async function handleEmergencyAccess(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
 
-        const login = await exchangeBetaCredentials(apiBaseUrl, trimmedEmail, trimmedAccessCode);
-        window.localStorage.setItem(tokenStorageKey, login.token);
-        router.replace('/admin');
-        return;
-      }
+    setStatus('validating');
+    setError(null);
 
-      const trimmedToken = tokenInput.trim();
-      if (!trimmedToken) {
-        setError('Paste your beta access token to continue.');
+    try {
+      if (!apiBaseUrl) {
+        setError(apiBaseUrlError);
         setStatus('idle');
         return;
       }
 
-      await validateToken(apiBaseUrl, trimmedToken);
-      window.localStorage.setItem(tokenStorageKey, trimmedToken);
-      router.replace('/admin');
-    } catch (validationError) {
-      setError(validationError instanceof Error ? validationError.message : 'Unable to validate your beta sign-in.');
+      const trimmedToken = tokenInput.trim();
+      if (trimmedToken) {
+        const session = await fetchMe(apiBaseUrl, trimmedToken);
+        storeToken(trimmedToken);
+        router.replace(session.landingPath || getLandingPathForRole(session.user.role));
+        return;
+      }
+
+      const trimmedAccessCode = accessCodeInput.trim();
+      if (!trimmedAccessCode) {
+        setError('Enter a shared beta access code or paste an emergency token.');
+        setStatus('idle');
+        return;
+      }
+
+      const login = await loginWithBetaAccessCode(apiBaseUrl, emailInput.trim().toLowerCase(), trimmedAccessCode);
+      storeToken(login.token);
+      router.replace(login.landingPath || getLandingPathForRole(login.user.role));
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : 'Unable to use emergency beta access.');
       setStatus('idle');
     }
   }
 
   return (
-    <section className="card" style={{ display: 'grid', gap: 16 }}>
+    <section className="card" style={{ display: 'grid', gap: 20 }}>
       <div>
-        <h2 className="sectionTitle">Closed beta sign-in</h2>
+        <h2 className="sectionTitle">Beta account sign-in</h2>
         <p className="muted">
-          Sign in with your seeded beta email and shared beta access code. Existing invite links with a `token` parameter still work.
+          Sign in with your named beta account and password. Platform admins can still use the emergency beta access flow below if needed.
         </p>
       </div>
-      <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 12 }}>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className="card"
-            style={{ cursor: 'pointer', fontWeight: 700, flex: '1 1 220px', borderColor: mode === 'credentials' ? 'var(--accent)' : undefined }}
-            onClick={() => {
-              setMode('credentials');
-              setError(null);
-            }}
-          >
-            Email + access code
-          </button>
-          <button
-            type="button"
-            className="card"
-            style={{ cursor: 'pointer', fontWeight: 700, flex: '1 1 220px', borderColor: mode === 'token' ? 'var(--accent)' : undefined }}
-            onClick={() => {
-              setMode('token');
-              setError(null);
-            }}
-          >
-            Paste existing token
-          </button>
-        </div>
-        {mode === 'credentials' ? (
-          <>
-            <label className="muted" htmlFor="beta-email">Beta email</label>
-            <input
-              id="beta-email"
-              type="email"
-              value={emailInput}
-              onChange={(event) => setEmailInput(event.target.value)}
-              className="card"
-              style={{ width: '100%' }}
-              placeholder="beta-admin@claritybridgehealth.com"
-              autoComplete="email"
-            />
-            <label className="muted" htmlFor="beta-access-code">Beta access code</label>
-            <input
-              id="beta-access-code"
-              type="password"
-              value={accessCodeInput}
-              onChange={(event) => setAccessCodeInput(event.target.value)}
-              className="card"
-              style={{ width: '100%' }}
-              placeholder="Enter shared beta access code"
-              autoComplete="current-password"
-            />
-          </>
-        ) : (
-          <>
-            <label className="muted" htmlFor="beta-token">Beta access token</label>
-            <textarea
-              id="beta-token"
-              value={tokenInput}
-              onChange={(event) => setTokenInput(event.target.value)}
-              rows={4}
-              className="card"
-              style={{ width: '100%', resize: 'vertical', fontFamily: 'monospace' }}
-              placeholder="Paste token here"
-            />
-          </>
-        )}
+
+      <form onSubmit={handlePasswordLogin} style={{ display: 'grid', gap: 12 }}>
+        <label className="muted" htmlFor="beta-email">Beta email</label>
+        <input
+          id="beta-email"
+          type="email"
+          value={emailInput}
+          onChange={(event) => setEmailInput(event.target.value)}
+          className="card"
+          style={{ width: '100%' }}
+          placeholder="beta-admin@claritybridgehealth.com"
+          autoComplete="email"
+        />
+        <label className="muted" htmlFor="beta-password">Password</label>
+        <input
+          id="beta-password"
+          type="password"
+          value={passwordInput}
+          onChange={(event) => setPasswordInput(event.target.value)}
+          className="card"
+          style={{ width: '100%' }}
+          placeholder="Enter your beta password"
+          autoComplete="current-password"
+        />
         <button
           type="submit"
           className="card"
@@ -239,6 +169,42 @@ export function BetaAccessClient() {
           {status === 'validating' ? 'Signing in...' : 'Continue to beta'}
         </button>
       </form>
+
+      <details className="card">
+        <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Emergency platform admin access</summary>
+        <form onSubmit={handleEmergencyAccess} style={{ display: 'grid', gap: 12, marginTop: 16 }}>
+          <label className="muted" htmlFor="beta-access-code">Shared beta access code</label>
+          <input
+            id="beta-access-code"
+            type="password"
+            value={accessCodeInput}
+            onChange={(event) => setAccessCodeInput(event.target.value)}
+            className="card"
+            style={{ width: '100%' }}
+            placeholder="Platform admin only"
+            autoComplete="one-time-code"
+          />
+          <label className="muted" htmlFor="beta-token">Or paste a JWT token</label>
+          <textarea
+            id="beta-token"
+            value={tokenInput}
+            onChange={(event) => setTokenInput(event.target.value)}
+            rows={4}
+            className="card"
+            style={{ width: '100%', resize: 'vertical', fontFamily: 'monospace' }}
+            placeholder="Paste emergency token here"
+          />
+          <button
+            type="submit"
+            className="card"
+            style={{ cursor: 'pointer', fontWeight: 700 }}
+            disabled={status === 'validating' || !apiBaseUrl}
+          >
+            Use emergency access
+          </button>
+        </form>
+      </details>
+
       {error || apiBaseUrlError ? <p style={{ color: '#b42318', margin: 0 }}>{error ?? apiBaseUrlError}</p> : null}
     </section>
   );
