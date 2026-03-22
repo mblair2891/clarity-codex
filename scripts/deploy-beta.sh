@@ -7,6 +7,11 @@ AWS_CLI="${AWS_CLI:-$ROOT_DIR/aws/dist/aws}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 IMAGE_TAG="${IMAGE_TAG:-$(git -C "$ROOT_DIR" rev-parse --short HEAD)}"
 TF_DIR="$ROOT_DIR/infra/aws"
+TF_EXTRA_ARGS=()
+
+if [[ -n "${BETA_LOGIN_CODE:-}" ]]; then
+  TF_EXTRA_ARGS+=("-var=beta_login_code=$BETA_LOGIN_CODE")
+fi
 
 if [[ ! -x "$AWS_CLI" ]]; then
   AWS_CLI="aws"
@@ -49,4 +54,5 @@ docker push "$API_REPO:$IMAGE_TAG"
 
 terraform -chdir="$TF_DIR" apply -auto-approve \
   -var-file="$TF_DIR/beta.tfvars.example" \
-  -var="image_tag=$IMAGE_TAG"
+  -var="image_tag=$IMAGE_TAG" \
+  "${TF_EXTRA_ARGS[@]}"

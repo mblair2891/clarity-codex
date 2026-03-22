@@ -12,6 +12,7 @@ api_subdomain      = "beta-api"
 next_public_app_name = "Clarity Bridge Health"
 jwt_issuer           = "clarity-bridge-health"
 jwt_audience         = "clarity-platform"
+# beta_login_code    = "replace-with-a-shared-beta-access-code"
 ai_provider          = "demo"
 
 enable_redis = false

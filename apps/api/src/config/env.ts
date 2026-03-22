@@ -9,6 +9,7 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(16).default('local-development-secret-change-me'),
   JWT_ISSUER: z.string().default('clarity-bridge-health'),
   JWT_AUDIENCE: z.string().default('clarity-platform'),
+  BETA_LOGIN_CODE: z.string().min(12).optional(),
   CORS_ORIGINS: z.string().default('http://localhost:3000,http://127.0.0.1:3000'),
   DATABASE_URL: z.string().optional(),
   REDIS_URL: z.string().optional(),

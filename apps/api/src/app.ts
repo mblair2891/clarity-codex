@@ -2,6 +2,8 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { corsOrigins, env } from './config/env.js';
 import { registerAuth } from './plugins/auth.js';
+import { authRoutes } from './routes/auth.js';
+import { adminRoutes } from './routes/admin.js';
 import { healthRoutes } from './routes/health.js';
 import { metaRoutes } from './routes/meta.js';
 import { consumerRoutes } from './routes/consumer.js';
@@ -42,7 +44,9 @@ export function buildApp() {
   });
 
   app.register(healthRoutes);
+  app.register(authRoutes);
   app.register(metaRoutes);
+  app.register(adminRoutes);
   app.register(consumerRoutes);
   app.register(clinicalRoutes);
   app.register(rcmRoutes);

@@ -109,6 +109,9 @@ resource "aws_secretsmanager_secret_version" "api" {
       {
         JWT_SECRET = random_password.jwt.result
       },
+      var.beta_login_code != null ? {
+        BETA_LOGIN_CODE = var.beta_login_code
+      } : {},
       var.enable_redis ? {
         REDIS_URL = var.redis_url
       } : {}

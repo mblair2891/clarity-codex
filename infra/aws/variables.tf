@@ -158,6 +158,13 @@ variable "jwt_audience" {
   default = "clarity-platform"
 }
 
+variable "beta_login_code" {
+  type      = string
+  default   = null
+  nullable  = true
+  sensitive = true
+}
+
 variable "ai_provider" {
   type    = string
   default = "demo"

@@ -9,6 +9,11 @@ export default function HomePage() {
         <p className="muted">
           Integrated recovery support, clinical operations, revenue cycle management, and safe AI workflows in one multi-tenant platform.
         </p>
+        <p>
+          <Link href="/login" className="card" style={{ display: 'inline-flex', marginTop: 16 }}>
+            Beta sign-in
+          </Link>
+        </p>
       </section>
       <div className="grid">
         <Link href="/consumer" className="card">

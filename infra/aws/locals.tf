@@ -46,6 +46,12 @@ locals {
         valueFrom = "${aws_secretsmanager_secret.database.arn}:DATABASE_URL::"
       }
     ],
+    var.beta_login_code != null ? [
+      {
+        name      = "BETA_LOGIN_CODE"
+        valueFrom = "${aws_secretsmanager_secret.api.arn}:BETA_LOGIN_CODE::"
+      }
+    ] : [],
     var.enable_redis ? [
       {
         name      = "REDIS_URL"
