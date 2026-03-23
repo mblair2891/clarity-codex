@@ -77,7 +77,240 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid var(--border);
   margin-bottom: 20px;
 }
+.consumerStack {
+  display: grid;
+  gap: 24px;
+}
+.consumerHero {
+  gap: 20px;
+  background:
+    radial-gradient(circle at top right, rgba(92, 150, 174, 0.18), transparent 30%),
+    linear-gradient(135deg, #f7fbfd 0%, #eef6fb 100%);
+}
+.consumerHeroTop,
+.sectionHeaderRow,
+.infoRow,
+.profileSummary,
+.consumerActions,
+.consumerStatusRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.consumerHeading {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 40px);
+}
+.consumerLead {
+  max-width: 60ch;
+}
+.consumerQuickActions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+.quickActionCard {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 16px;
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+.quickActionCard:hover {
+  border-color: var(--accent);
+}
+.consumerTwoColumn {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 20px;
+}
+.consumerSectionGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+.consumerFormGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.fieldLabel {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.fieldSpan {
+  grid-column: 1 / -1;
+}
+.inputField {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: #fbfdff;
+  color: var(--text);
+  padding: 14px 16px;
+  font: inherit;
+}
+.textareaField {
+  min-height: 120px;
+  resize: vertical;
+}
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+.primaryButton,
+.secondaryButton {
+  appearance: none;
+  border-radius: 16px;
+  padding: 14px 18px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.primaryButton {
+  background: var(--accent);
+  color: white;
+}
+.secondaryButton {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+.primaryButton:disabled,
+.secondaryButton:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+.statusPill.success {
+  background: #e8f7ee;
+  color: #0b6a38;
+}
+.statusPill.warning {
+  background: #fff3dc;
+  color: #9a5b00;
+}
+.statusPill.focus {
+  background: #edf1ff;
+  color: #3551a4;
+}
+.statusPill.neutral {
+  background: #eef4f6;
+  color: var(--muted);
+}
+.pillRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.detailList,
+.simpleList {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 10px;
+}
+.detailList li,
+.simpleList li {
+  color: var(--text);
+}
+.detailList li {
+  display: grid;
+  gap: 4px;
+}
+.timeline {
+  display: grid;
+  gap: 12px;
+}
+.timelineItem,
+.listItemCard,
+.supportCard,
+.taskCard {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+}
+.taskCard {
+  background: white;
+}
+.supportPanel {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #f3f8fc 0%, #f8fbf2 100%);
+  border: 1px solid var(--border);
+}
+.trendBlock {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.trendBar {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: #e6edf3;
+  overflow: hidden;
+}
+.trendBar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6fb0a1 0%, #4e88b0 100%);
+}
+.successText {
+  color: #067647;
+  margin: 12px 0 0;
+}
+.profileFlags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { border-right: none; border-bottom: 1px solid var(--border); }
+  .consumerTwoColumn,
+  .consumerFormGrid {
+    grid-template-columns: 1fr;
+  }
+  .consumerHeroTop,
+  .sectionHeaderRow,
+  .infoRow,
+  .profileSummary,
+  .consumerActions,
+  .consumerStatusRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .consumerActions {
+    width: 100%;
+  }
+  .primaryButton,
+  .secondaryButton {
+    width: 100%;
+  }
 }

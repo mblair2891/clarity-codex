@@ -10,6 +10,7 @@ export const supportedBetaRoles = [
 
 export const clinicalAccessRoles: Role[] = ['clinical_staff', 'clinician', 'case_manager', 'org_admin', 'platform_admin'];
 export const consumerAccessRoles: Role[] = ['consumer', 'clinical_staff', 'clinician', 'case_manager', 'platform_admin'];
+export const consumerSelfAccessRoles: Role[] = ['consumer'];
 export const adminAccessRoles: Role[] = ['org_admin', 'platform_admin'];
 
 export function isClinicalRole(role: Role) {

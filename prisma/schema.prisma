@@ -114,6 +114,9 @@ model Consumer {
   userAccount         User?
   firstName           String
   lastName            String
+  preferredName       String?
+  recoveryFocus       String?
+  checkInPreference   String?
   dob                 DateTime?
   traumaMode          Boolean              @default(false)
   cognitiveAssistMode Boolean              @default(false)
@@ -121,6 +124,7 @@ model Consumer {
   journals            JournalEntry[]
   goals               Goal[]
   routines            Routine[]
+  recoveryPlan        RecoveryPlan?
   conditions          ConsumerCondition[]
   treatmentPlans      TreatmentPlan[]
   medications         MedicationRecord[]
@@ -133,14 +137,25 @@ model Consumer {
 }
 
 model DailyCheckIn {
-  id         String   @id @default(cuid())
-  consumerId String
-  consumer   Consumer @relation(fields: [consumerId], references: [id])
-  mood       Int
-  cravings   Int
-  sleepHours Float?
-  gratitude  String?
-  createdAt  DateTime @default(now())
+  id                    String   @id @default(cuid())
+  consumerId            String
+  consumer              Consumer @relation(fields: [consumerId], references: [id])
+  checkInDate           DateTime
+  mood                  Int
+  cravings              Int
+  stressLevel           Int?
+  sleepHours            Float?
+  sleepQuality          Int?
+  motivationLevel       Int?
+  treatmentAdherence    Boolean?
+  wantsStaffFollowUp    Boolean  @default(false)
+  difficultMoments      String[]
+  copingToolsUsed       String[]
+  notes                 String?
+  gratitude             String?
+  createdAt             DateTime @default(now())
+
+  @@unique([consumerId, checkInDate])
 }
 
 model JournalEntry {
@@ -149,6 +164,9 @@ model JournalEntry {
   consumer   Consumer @relation(fields: [consumerId], references: [id])
   title      String
   content    String
+  moodScore  Int?
+  theme      String?
+  sharedWithCareTeam Boolean @default(false)
   aiSummary  String?
   createdAt  DateTime @default(now())
 }
@@ -158,16 +176,49 @@ model Goal {
   consumerId String
   consumer   Consumer  @relation(fields: [consumerId], references: [id])
   title      String
+  description String?
+  category   String?
+  targetLabel String?
   status     String
   targetDate DateTime?
 }
 
 model Routine {
-  id         String   @id @default(cuid())
-  consumerId String
-  consumer   Consumer @relation(fields: [consumerId], references: [id])
-  title      String
-  frequency  String
+  id           String              @id @default(cuid())
+  consumerId   String
+  consumer     Consumer            @relation(fields: [consumerId], references: [id])
+  title        String
+  description  String?
+  category     String?
+  frequency    String
+  targetPerWeek Int?
+  isActive     Boolean             @default(true)
+  completions  RoutineCompletion[]
+}
+
+model RoutineCompletion {
+  id             String    @id @default(cuid())
+  routineId      String
+  routine        Routine   @relation(fields: [routineId], references: [id])
+  completionDate DateTime
+  createdAt      DateTime  @default(now())
+
+  @@unique([routineId, completionDate])
+}
+
+model RecoveryPlan {
+  id               String   @id @default(cuid())
+  consumerId       String   @unique
+  consumer         Consumer @relation(fields: [consumerId], references: [id])
+  summary          String
+  focusAreas       Json
+  copingStrategies Json
+  reminders        Json
+  supportContacts  Json
+  safetyPlan       Json
+  milestones       Json
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 model ConsumerCondition {
