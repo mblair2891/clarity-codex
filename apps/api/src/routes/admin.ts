@@ -62,6 +62,9 @@ function getUserScopeWhere(auth: AdminAuth): Prisma.UserWhereInput {
 
   return {
     tenantId: auth.tenantId,
+    role: {
+      not: 'platform_admin'
+    },
     memberships: {
       some: {
         organizationId: {
@@ -697,9 +700,7 @@ export async function adminRoutes(app: FastifyInstance) {
         { id: 'manage-orgs', label: 'Update organization details', description: 'Keep org names and identifiers current.' }
       ],
       organizations: organizations.map((organization) => {
-        const organizationUserMemberships = organization.memberships;
-        const uniqueUsers = new Map(organizationUserMemberships.map((membership) => [membership.userId, membership.user]));
-        const scopedUsers = Array.from(uniqueUsers.values());
+        const scopedUsers = users.filter((user) => user.memberships.some((membership) => membership.organizationId === organization.id));
 
         return {
           id: organization.id,
