@@ -39,6 +39,16 @@ enum ClaimStatus {
   paid
 }
 
+enum BillingWorkItemStatus {
+  draft
+  ready_for_review
+  submitted
+  needs_correction
+  paid
+  denied
+  follow_up_needed
+}
+
 enum AiActionType {
   recovery_coach
   journaling_assist
@@ -48,56 +58,64 @@ enum AiActionType {
 }
 
 model Tenant {
-  id             String           @id @default(cuid())
-  slug           String           @unique
-  name           String
-  createdAt      DateTime         @default(now())
-  organizations  Organization[]
-  users          User[]
-  consumers      Consumer[]
-  clinicalNotes  ClinicalNote[]
-  checkInReviews CheckInReview[]
-  payers         Payer[]
-  promptRegistry PromptRegistry[]
-  aiRuns         AiRun[]
-  auditLogs      AuditLog[]
+  id               String               @id @default(cuid())
+  slug             String               @unique
+  name             String
+  createdAt        DateTime             @default(now())
+  organizations    Organization[]
+  users            User[]
+  consumers        Consumer[]
+  clinicalNotes    ClinicalNote[]
+  checkInReviews   CheckInReview[]
+  billingWorkItems BillingWorkItem[]
+  billingNotes     BillingNote[]
+  payers           Payer[]
+  promptRegistry   PromptRegistry[]
+  aiRuns           AiRun[]
+  auditLogs        AuditLog[]
 }
 
 model Organization {
-  id           String         @id @default(cuid())
-  tenantId     String
-  tenant       Tenant         @relation(fields: [tenantId], references: [id])
-  name         String
-  npi          String?
-  taxId        String?
-  memberships  Membership[]
-  consumers    Consumer[]
-  clinicalNotes ClinicalNote[]
+  id               String               @id @default(cuid())
+  tenantId         String
+  tenant           Tenant               @relation(fields: [tenantId], references: [id])
+  name             String
+  npi              String?
+  taxId            String?
+  memberships      Membership[]
+  consumers        Consumer[]
+  clinicalNotes    ClinicalNote[]
   checkInReviews CheckInReview[]
-  appointments Appointment[]
-  groups       GroupSession[]
-  encounters   Encounter[]
-  createdAt    DateTime       @default(now())
+  billingWorkItems BillingWorkItem[]
+  billingNotes     BillingNote[]
+  appointments   Appointment[]
+  groups         GroupSession[]
+  encounters     Encounter[]
+  createdAt      DateTime             @default(now())
 }
 
 model User {
-  id                 String       @id @default(cuid())
-  tenantId           String
-  tenant             Tenant       @relation(fields: [tenantId], references: [id])
-  consumerId         String?      @unique
-  consumer           Consumer?    @relation(fields: [consumerId], references: [id])
-  email              String
-  fullName           String
-  role               Role
-  passwordHash       String?
-  isActive           Boolean      @default(true)
-  mustChangePassword Boolean      @default(false)
-  memberships        Membership[]
+  id                    String            @id @default(cuid())
+  tenantId              String
+  tenant                Tenant            @relation(fields: [tenantId], references: [id])
+  consumerId            String?           @unique
+  consumer              Consumer?         @relation(fields: [consumerId], references: [id])
+  email                 String
+  fullName              String
+  role                  Role
+  passwordHash          String?
+  isActive              Boolean           @default(true)
+  mustChangePassword    Boolean           @default(false)
+  memberships           Membership[]
   authoredClinicalNotes ClinicalNote[]
   completedCheckInReviews CheckInReview[]
-  auditLogs          AuditLog[]
-  aiRuns             AiRun[]
-  createdAt          DateTime     @default(now())
+  createdBillingWorkItems BillingWorkItem[] @relation("BillingWorkItemCreatedBy")
+  updatedBillingWorkItems BillingWorkItem[] @relation("BillingWorkItemUpdatedBy")
+  authoredBillingNotes BillingNote[]      @relation("BillingNoteAuthor")
+  billingActivities   BillingWorkItemActivity[] @relation("BillingWorkItemActivityActor")
+  auditLogs           AuditLog[]
+  aiRuns              AiRun[]
+  createdAt           DateTime          @default(now())
 
   @@unique([tenantId, email])
 }
@@ -137,6 +155,8 @@ model Consumer {
   appointments        Appointment[]
   clinicalNotes       ClinicalNote[]
   checkInReviews      CheckInReview[]
+  billingWorkItems    BillingWorkItem[]
+  billingNotes        BillingNote[]
   encounters          Encounter[]
   coverages           Coverage[]
   invoices            Invoice[]
@@ -366,6 +386,7 @@ model Coverage {
   groupNumber    String?
   isActive       Boolean         @default(true)
   authorizations Authorization[]
+  billingWorkItems BillingWorkItem[]
 }
 
 model Authorization {
@@ -389,6 +410,7 @@ model Encounter {
   status         String
   charges        Charge[]
   claims         Claim[]
+  billingWorkItems BillingWorkItem[]
 }
 
 model Charge {
@@ -417,6 +439,78 @@ model Claim {
   denialReason String?
   denials      Denial[]
   remittance   Remittance?
+  billingWorkItems BillingWorkItem[]
+}
+
+model BillingWorkItem {
+  id              String                @id @default(cuid())
+  tenantId        String
+  tenant          Tenant                @relation(fields: [tenantId], references: [id])
+  organizationId  String
+  organization    Organization          @relation(fields: [organizationId], references: [id])
+  consumerId      String
+  consumer        Consumer              @relation(fields: [consumerId], references: [id])
+  encounterId     String?
+  encounter       Encounter?            @relation(fields: [encounterId], references: [id])
+  claimId         String?
+  claim           Claim?                @relation(fields: [claimId], references: [id])
+  coverageId      String?
+  coverage        Coverage?             @relation(fields: [coverageId], references: [id])
+  createdByUserId String
+  createdBy       User                  @relation("BillingWorkItemCreatedBy", fields: [createdByUserId], references: [id])
+  updatedByUserId String?
+  updatedBy       User?                 @relation("BillingWorkItemUpdatedBy", fields: [updatedByUserId], references: [id])
+  title           String
+  status          BillingWorkItemStatus @default(draft)
+  priority        String                @default("normal")
+  payerName       String?
+  issueSummary    String?
+  nextAction      String?
+  amountCents     Int?
+  serviceDate     DateTime?
+  submittedAt     DateTime?
+  notes           BillingNote[]
+  activities      BillingWorkItemActivity[]
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@index([organizationId, status, updatedAt])
+  @@index([consumerId, updatedAt])
+}
+
+model BillingNote {
+  id              String          @id @default(cuid())
+  tenantId        String
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  organizationId  String
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  consumerId      String
+  consumer        Consumer        @relation(fields: [consumerId], references: [id])
+  workItemId      String?
+  workItem        BillingWorkItem? @relation(fields: [workItemId], references: [id])
+  authorUserId    String
+  author          User            @relation("BillingNoteAuthor", fields: [authorUserId], references: [id])
+  noteType        String          @default("billing_note")
+  body            String
+  createdAt       DateTime        @default(now())
+
+  @@index([consumerId, createdAt])
+  @@index([workItemId, createdAt])
+}
+
+model BillingWorkItemActivity {
+  id              String          @id @default(cuid())
+  workItemId      String
+  workItem        BillingWorkItem @relation(fields: [workItemId], references: [id])
+  actorUserId     String?
+  actor           User?           @relation("BillingWorkItemActivityActor", fields: [actorUserId], references: [id])
+  action          String
+  fromStatus      BillingWorkItemStatus?
+  toStatus        BillingWorkItemStatus?
+  detail          String?
+  createdAt       DateTime        @default(now())
+
+  @@index([workItemId, createdAt])
 }
 
 model Remittance {
