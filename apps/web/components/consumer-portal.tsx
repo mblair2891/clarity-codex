@@ -1390,9 +1390,9 @@ export function ConsumerPortal() {
           </section>
 
           {error ? (
-            <section className="card" style={{ borderColor: '#f4c7c3' }}>
+            <section className="banner bannerError" style={{ marginBottom: 0 }}>
               <h3 className="sectionTitle">Something needs attention</h3>
-              <p style={{ color: '#b42318', margin: 0 }}>{error}</p>
+              <p style={{ margin: 0 }}>{error}</p>
             </section>
           ) : null}
         </div>

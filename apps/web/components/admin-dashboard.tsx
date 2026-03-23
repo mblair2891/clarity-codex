@@ -983,8 +983,8 @@ export function AdminDashboard() {
                   {isCreatingUser ? 'Creating beta user...' : 'Create beta user'}
                 </button>
               </form>
-              {createSuccess ? <p className="successText">{createSuccess}</p> : null}
-              {createError ? <p style={{ color: '#b42318', marginTop: 12 }}>{createError}</p> : null}
+              {createSuccess ? <div className="banner bannerSuccess" style={{ marginBottom: 0 }}>{createSuccess}</div> : null}
+              {createError ? <div className="banner bannerError" style={{ marginBottom: 0 }}>{createError}</div> : null}
             </article>
 
             <article className="card">
@@ -1055,8 +1055,8 @@ export function AdminDashboard() {
               ) : (
                 <p className="muted">Select a user from the list to manage their account.</p>
               )}
-              {userActionSuccess ? <p className="successText">{userActionSuccess}</p> : null}
-              {userActionError ? <p style={{ color: '#b42318', marginTop: 12 }}>{userActionError}</p> : null}
+              {userActionSuccess ? <div className="banner bannerSuccess" style={{ marginBottom: 0 }}>{userActionSuccess}</div> : null}
+              {userActionError ? <div className="banner bannerError" style={{ marginBottom: 0 }}>{userActionError}</div> : null}
             </article>
           </div>
         </section>
@@ -1154,8 +1154,8 @@ export function AdminDashboard() {
               ) : (
                 <p className="muted">Select an organization to view its admin summary and edit baseline details.</p>
               )}
-              {organizationActionSuccess ? <p className="successText">{organizationActionSuccess}</p> : null}
-              {organizationActionError ? <p style={{ color: '#b42318', marginTop: 12 }}>{organizationActionError}</p> : null}
+              {organizationActionSuccess ? <div className="banner bannerSuccess" style={{ marginBottom: 0 }}>{organizationActionSuccess}</div> : null}
+              {organizationActionError ? <div className="banner bannerError" style={{ marginBottom: 0 }}>{organizationActionError}</div> : null}
             </article>
 
             <article className="card">
@@ -1180,7 +1180,7 @@ export function AdminDashboard() {
           </div>
         </section>
 
-        {error ? <p style={{ color: '#b42318', margin: 0 }}>{error}</p> : null}
+        {error ? <div className="banner bannerError" style={{ marginBottom: 0 }}>{error}</div> : null}
 
         <section>
           <PasswordUpdateCard mustChangePassword={me?.user.mustChangePassword} />

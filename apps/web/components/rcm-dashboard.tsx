@@ -1617,8 +1617,8 @@ export function RcmDashboard({ initialConsumerId = null }: { initialConsumerId?:
             </article>
           </section>
 
-          {successMessage ? <div className="banner">{successMessage}</div> : null}
-          {error ? <div className="banner rcmErrorBanner">{error}</div> : null}
+          {successMessage ? <div className="banner bannerSuccess">{successMessage}</div> : null}
+          {error ? <div className="banner bannerError">{error}</div> : null}
 
           <section>
             <PasswordUpdateCard mustChangePassword={dashboard?.billingUser.mustChangePassword ?? me?.user.mustChangePassword} />

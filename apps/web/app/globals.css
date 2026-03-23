@@ -53,6 +53,11 @@ a { color: inherit; text-decoration: none; }
   box-shadow: 0 10px 30px rgba(25, 55, 78, 0.06);
 }
 .navCard:hover { border-color: var(--accent); }
+.navCardActive {
+  border-color: var(--accent);
+  background: linear-gradient(135deg, #f4fbff 0%, #f7fbf5 100%);
+  box-shadow: 0 12px 28px rgba(53, 111, 136, 0.12);
+}
 .metric {
   font-size: 28px;
   font-weight: 700;
@@ -76,6 +81,14 @@ a { color: inherit; text-decoration: none; }
   background: linear-gradient(135deg, #e7f4f0 0%, #edf2ff 100%);
   border: 1px solid var(--border);
   margin-bottom: 20px;
+}
+.bannerError {
+  background: linear-gradient(135deg, #fff2ef 0%, #fff8f3 100%);
+  color: #9e2f1b;
+}
+.bannerSuccess {
+  background: linear-gradient(135deg, #ecfbf1 0%, #f5fffb 100%);
+  color: #0b6a38;
 }
 .consumerStack {
   display: grid;
@@ -333,10 +346,6 @@ a { color: inherit; text-decoration: none; }
   border-color: var(--accent);
   background: #f5fbff;
   box-shadow: 0 12px 30px rgba(53, 111, 136, 0.12);
-}
-.rcmErrorBanner {
-  background: linear-gradient(135deg, #fff2ef 0%, #fff8f3 100%);
-  color: #9e2f1b;
 }
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }

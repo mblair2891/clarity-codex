@@ -1287,8 +1287,8 @@ export function ClinicalDashboard({
             </section>
           ) : null}
 
-          {error ? <p style={{ color: '#b42318' }}>{error}</p> : null}
-          {successMessage ? <p style={{ color: '#0b6a38' }}>{successMessage}</p> : null}
+          {error ? <div className="banner bannerError" style={{ marginBottom: 0 }}>{error}</div> : null}
+          {successMessage ? <div className="banner bannerSuccess" style={{ marginBottom: 0 }}>{successMessage}</div> : null}
 
           <section>
             <PasswordUpdateCard mustChangePassword={me?.user.mustChangePassword} />
