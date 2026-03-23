@@ -282,6 +282,40 @@ async function upsertCheckInReview(tenantId, organizationId, consumerId, reviewe
   });
 }
 
+async function upsertAuditLog(tenantId, userId, action, entityType, entityId, metadata, createdAt) {
+  const existing = await prisma.auditLog.findFirst({
+    where: {
+      tenantId,
+      userId,
+      action,
+      entityType,
+      entityId: entityId ?? null
+    }
+  });
+
+  if (existing) {
+    return prisma.auditLog.update({
+      where: { id: existing.id },
+      data: {
+        metadata,
+        createdAt
+      }
+    });
+  }
+
+  return prisma.auditLog.create({
+    data: {
+      tenantId,
+      userId,
+      action,
+      entityType,
+      entityId,
+      metadata,
+      createdAt
+    }
+  });
+}
+
 async function main() {
   const tenant = await prisma.tenant.upsert({
     where: { slug: 'beta-demo' },
@@ -352,7 +386,19 @@ async function main() {
       role: 'platform_admin',
       password: seedPasswords.platformAdmin,
       membershipRole: 'org_admin',
-      consumerId: null
+      consumerId: null,
+      isActive: true,
+      mustChangePassword: false
+    },
+    {
+      email: 'beta-org-admin@claritybridgehealth.com',
+      fullName: 'Morgan Org Admin',
+      role: 'org_admin',
+      password: seedPasswords.platformAdmin,
+      membershipRole: 'org_admin',
+      consumerId: null,
+      isActive: true,
+      mustChangePassword: true
     },
     {
       email: 'beta-clinical@claritybridgehealth.com',
@@ -360,7 +406,19 @@ async function main() {
       role: 'clinical_staff',
       password: seedPasswords.clinicalStaff,
       membershipRole: 'clinical_staff',
-      consumerId: null
+      consumerId: null,
+      isActive: true,
+      mustChangePassword: false
+    },
+    {
+      email: 'beta-care-coordinator@claritybridgehealth.com',
+      fullName: 'Riley Care Coordinator',
+      role: 'clinical_staff',
+      password: seedPasswords.clinicalStaff,
+      membershipRole: 'clinical_staff',
+      consumerId: null,
+      isActive: false,
+      mustChangePassword: true
     },
     {
       email: 'beta-billing@claritybridgehealth.com',
@@ -368,7 +426,9 @@ async function main() {
       role: 'billing',
       password: seedPasswords.billing,
       membershipRole: 'billing',
-      consumerId: null
+      consumerId: null,
+      isActive: true,
+      mustChangePassword: false
     },
     {
       email: 'beta-consumer@claritybridgehealth.com',
@@ -376,7 +436,9 @@ async function main() {
       role: 'consumer',
       password: seedPasswords.consumer,
       membershipRole: 'consumer',
-      consumerId: consumer.id
+      consumerId: consumer.id,
+      isActive: true,
+      mustChangePassword: false
     }
   ];
 
@@ -394,8 +456,8 @@ async function main() {
         fullName: seededUser.fullName,
         role: seededUser.role,
         passwordHash: await hashPassword(seededUser.password),
-        isActive: true,
-        mustChangePassword: false,
+        isActive: seededUser.isActive,
+        mustChangePassword: seededUser.mustChangePassword,
         consumerId: seededUser.consumerId
       },
       create: {
@@ -404,8 +466,8 @@ async function main() {
         fullName: seededUser.fullName,
         role: seededUser.role,
         passwordHash: await hashPassword(seededUser.password),
-        isActive: true,
-        mustChangePassword: false,
+        isActive: seededUser.isActive,
+        mustChangePassword: seededUser.mustChangePassword,
         consumerId: seededUser.consumerId
       }
     });
@@ -431,9 +493,15 @@ async function main() {
   }
 
   const clinicalUser = upsertedUsers.find((user) => user.role === 'clinical_staff');
+  const platformAdminUser = upsertedUsers.find((user) => user.role === 'platform_admin');
+  const orgAdminUser = upsertedUsers.find((user) => user.email === 'beta-org-admin@claritybridgehealth.com');
 
   if (!clinicalUser) {
     throw new Error('Expected seeded clinical_staff account to exist.');
+  }
+
+  if (!platformAdminUser || !orgAdminUser) {
+    throw new Error('Expected seeded admin accounts to exist.');
   }
 
   const marcus = await upsertConsumerProfile(tenant.id, organization.id, {
@@ -1219,6 +1287,46 @@ async function main() {
     });
   }
 
+  await upsertAuditLog(
+    tenant.id,
+    platformAdminUser.id,
+    'admin.user.created',
+    'user',
+    orgAdminUser.id,
+    {
+      email: 'beta-org-admin@claritybridgehealth.com',
+      role: 'org_admin',
+      seeded: true
+    },
+    atUtcHour(startOfUtcDay(-2), 14, 15)
+  );
+
+  await upsertAuditLog(
+    tenant.id,
+    orgAdminUser.id,
+    'admin.organization.updated',
+    'organization',
+    organization.id,
+    {
+      name: organization.name,
+      seeded: true
+    },
+    atUtcHour(startOfUtcDay(-1), 11, 20)
+  );
+
+  await upsertAuditLog(
+    tenant.id,
+    platformAdminUser.id,
+    'admin.user.temporary_password_set',
+    'user',
+    clinicalUser.id,
+    {
+      seeded: true,
+      mustChangePassword: false
+    },
+    atUtcHour(startOfUtcDay(0), 8, 10)
+  );
+
   console.log(JSON.stringify({
     seeded: true,
     tenantId: tenant.id,
@@ -1237,6 +1345,12 @@ async function main() {
       noteExamples: 3,
       reviewItemsSeeded: 3,
       followUpQueueConsumers: 2
+    },
+    adminExperience: {
+      usersSeeded: seededUsers.length,
+      orgAdminsSeeded: seededUsers.filter((user) => user.role === 'org_admin').length,
+      inactiveUsersSeeded: seededUsers.filter((user) => !user.isActive).length,
+      auditEventsSeeded: 3
     },
     sampleAccounts: seededUsers.map((user) => ({
       email: user.email,
