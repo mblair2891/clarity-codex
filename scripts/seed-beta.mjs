@@ -174,6 +174,114 @@ async function upsertAppointment(organizationId, consumerId, data) {
   });
 }
 
+async function upsertConsumerProfile(tenantId, organizationId, data) {
+  const existing = await prisma.consumer.findFirst({
+    where: {
+      tenantId,
+      firstName: data.firstName,
+      lastName: data.lastName
+    }
+  });
+
+  if (existing) {
+    return prisma.consumer.update({
+      where: { id: existing.id },
+      data: {
+        organizationId,
+        ...data
+      }
+    });
+  }
+
+  return prisma.consumer.create({
+    data: {
+      tenantId,
+      organizationId,
+      ...data
+    }
+  });
+}
+
+async function upsertDailyCheckIn(consumerId, data) {
+  return prisma.dailyCheckIn.upsert({
+    where: {
+      consumerId_checkInDate: {
+        consumerId,
+        checkInDate: data.checkInDate
+      }
+    },
+    update: {
+      mood: data.mood,
+      cravings: data.cravings,
+      stressLevel: data.stressLevel,
+      sleepHours: data.sleepHours,
+      sleepQuality: data.sleepQuality,
+      motivationLevel: data.motivationLevel,
+      treatmentAdherence: data.treatmentAdherence,
+      difficultMoments: data.difficultMoments,
+      copingToolsUsed: data.copingToolsUsed,
+      wantsStaffFollowUp: data.wantsStaffFollowUp,
+      notes: data.notes,
+      gratitude: data.gratitude
+    },
+    create: {
+      consumerId,
+      ...data
+    }
+  });
+}
+
+async function upsertClinicalNote(tenantId, organizationId, consumerId, authorUserId, data) {
+  const existing = await prisma.clinicalNote.findFirst({
+    where: {
+      consumerId,
+      authorUserId,
+      noteType: data.noteType,
+      title: data.title ?? null
+    }
+  });
+
+  if (existing) {
+    return prisma.clinicalNote.update({
+      where: { id: existing.id },
+      data: {
+        body: data.body,
+        flaggedForFollowUp: data.flaggedForFollowUp ?? false
+      }
+    });
+  }
+
+  return prisma.clinicalNote.create({
+    data: {
+      tenantId,
+      organizationId,
+      consumerId,
+      authorUserId,
+      noteType: data.noteType,
+      title: data.title ?? null,
+      body: data.body,
+      flaggedForFollowUp: data.flaggedForFollowUp ?? false
+    }
+  });
+}
+
+async function upsertCheckInReview(tenantId, organizationId, consumerId, reviewerUserId, checkInId, data) {
+  return prisma.checkInReview.upsert({
+    where: {
+      checkInId
+    },
+    update: data,
+    create: {
+      tenantId,
+      organizationId,
+      consumerId,
+      reviewerUserId,
+      checkInId,
+      ...data
+    }
+  });
+}
+
 async function main() {
   const tenant = await prisma.tenant.upsert({
     where: { slug: 'beta-demo' },
@@ -321,6 +429,32 @@ async function main() {
       });
     }
   }
+
+  const clinicalUser = upsertedUsers.find((user) => user.role === 'clinical_staff');
+
+  if (!clinicalUser) {
+    throw new Error('Expected seeded clinical_staff account to exist.');
+  }
+
+  const marcus = await upsertConsumerProfile(tenant.id, organization.id, {
+    firstName: 'Marcus',
+    lastName: 'Green',
+    preferredName: 'Marcus',
+    recoveryFocus: 'Stay engaged after work shifts and use outreach before cravings turn into a missed evening.',
+    checkInPreference: 'Late afternoon check-in after work',
+    traumaMode: false,
+    cognitiveAssistMode: true
+  });
+
+  const naomi = await upsertConsumerProfile(tenant.id, organization.id, {
+    firstName: 'Naomi',
+    lastName: 'Carter',
+    preferredName: 'Naomi',
+    recoveryFocus: 'Stabilize sleep, reduce isolation, and rebuild confidence after missed appointments.',
+    checkInPreference: 'Midday check-in with simple next steps',
+    traumaMode: true,
+    cognitiveAssistMode: false
+  });
 
   await upsertConsumerCondition(consumer.id, {
     name: 'PTSD',
@@ -626,47 +760,26 @@ async function main() {
     }
   ];
 
+  const avaCheckIns = [];
+
   for (const checkInSeed of checkInSeeds) {
     const checkInDate = startOfUtcDay(checkInSeed.offsetDays);
 
-    await prisma.dailyCheckIn.upsert({
-      where: {
-        consumerId_checkInDate: {
-          consumerId: consumer.id,
-          checkInDate
-        }
-      },
-      update: {
-        mood: checkInSeed.mood,
-        cravings: checkInSeed.cravings,
-        stressLevel: checkInSeed.stressLevel,
-        sleepHours: checkInSeed.sleepHours,
-        sleepQuality: checkInSeed.sleepQuality,
-        motivationLevel: checkInSeed.motivationLevel,
-        treatmentAdherence: checkInSeed.treatmentAdherence,
-        difficultMoments: checkInSeed.difficultMoments,
-        copingToolsUsed: checkInSeed.copingToolsUsed,
-        wantsStaffFollowUp: checkInSeed.wantsStaffFollowUp,
-        notes: checkInSeed.notes,
-        gratitude: checkInSeed.gratitude
-      },
-      create: {
-        consumerId: consumer.id,
-        checkInDate,
-        mood: checkInSeed.mood,
-        cravings: checkInSeed.cravings,
-        stressLevel: checkInSeed.stressLevel,
-        sleepHours: checkInSeed.sleepHours,
-        sleepQuality: checkInSeed.sleepQuality,
-        motivationLevel: checkInSeed.motivationLevel,
-        treatmentAdherence: checkInSeed.treatmentAdherence,
-        difficultMoments: checkInSeed.difficultMoments,
-        copingToolsUsed: checkInSeed.copingToolsUsed,
-        wantsStaffFollowUp: checkInSeed.wantsStaffFollowUp,
-        notes: checkInSeed.notes,
-        gratitude: checkInSeed.gratitude
-      }
-    });
+    avaCheckIns.push(await upsertDailyCheckIn(consumer.id, {
+      checkInDate,
+      mood: checkInSeed.mood,
+      cravings: checkInSeed.cravings,
+      stressLevel: checkInSeed.stressLevel,
+      sleepHours: checkInSeed.sleepHours,
+      sleepQuality: checkInSeed.sleepQuality,
+      motivationLevel: checkInSeed.motivationLevel,
+      treatmentAdherence: checkInSeed.treatmentAdherence,
+      difficultMoments: checkInSeed.difficultMoments,
+      copingToolsUsed: checkInSeed.copingToolsUsed,
+      wantsStaffFollowUp: checkInSeed.wantsStaffFollowUp,
+      notes: checkInSeed.notes,
+      gratitude: checkInSeed.gratitude
+    }));
   }
 
   const journalSeeds = [
@@ -753,17 +866,377 @@ async function main() {
     });
   }
 
+  const marcusMorningRoutine = await upsertRoutine(marcus.id, {
+    title: 'After-work craving reset',
+    description: 'Pause after shift change, drink water, and complete one grounding step before going home.',
+    category: 'relapse prevention',
+    frequency: 'daily',
+    targetPerWeek: 7,
+    isActive: true
+  });
+
+  const marcusSupportRoutine = await upsertRoutine(marcus.id, {
+    title: 'Text sponsor before 7 PM',
+    description: 'Reach out on work nights before cravings build after the commute home.',
+    category: 'connection',
+    frequency: '5x weekly',
+    targetPerWeek: 5,
+    isActive: true
+  });
+
+  const naomiSleepRoutine = await upsertRoutine(naomi.id, {
+    title: 'Night wind-down plan',
+    description: 'Dim lights, silence notifications, and start the sleep routine before 10 PM.',
+    category: 'sleep',
+    frequency: 'daily',
+    targetPerWeek: 7,
+    isActive: true
+  });
+
+  await upsertGoal(marcus.id, {
+    title: 'Finish five sober evenings after work this week',
+    description: 'Use the commute and first hour home as structured recovery time.',
+    category: 'relapse prevention',
+    targetLabel: '5 evenings this week',
+    status: 'in_progress',
+    targetDate: startOfUtcDay(7)
+  });
+
+  await upsertGoal(naomi.id, {
+    title: 'Re-establish a stable sleep routine',
+    description: 'Aim for five nights of intentional wind-down this week.',
+    category: 'sleep',
+    targetLabel: '5 nights this week',
+    status: 'in_progress',
+    targetDate: startOfUtcDay(7)
+  });
+
+  await upsertConsumerCondition(marcus.id, {
+    name: 'anxiety',
+    status: 'active',
+    symptomScore: 6,
+    accommodation: 'Offer brief step-by-step prompts when stress is elevated after work.'
+  });
+
+  await upsertConsumerCondition(naomi.id, {
+    name: 'depression',
+    status: 'active',
+    symptomScore: 7,
+    accommodation: 'Use clear, concrete next steps and reinforce small wins.'
+  });
+
+  await prisma.recoveryPlan.upsert({
+    where: { consumerId: marcus.id },
+    update: {
+      summary: 'Marcus does best with structured post-shift support, fast outreach, and concrete coping steps before cravings spike.',
+      focusAreas: [
+        { title: 'Protect evenings', detail: 'Use the first 30 minutes after work to slow down, hydrate, and reset.' },
+        { title: 'Interrupt isolation', detail: 'Text sponsor or care team before skipping dinner or support contact.' }
+      ],
+      copingStrategies: [
+        { title: 'Car-to-home reset', detail: 'Sit in the car for two minutes, breathe, and name the next safe action.' },
+        { title: 'Short walking route', detail: 'Walk one block before entering the apartment if the urge feels sharp.' }
+      ],
+      reminders: [
+        { title: 'After-work check-in', schedule: 'Weekdays by 5:30 PM' }
+      ],
+      supportContacts: [
+        { name: 'Taylor Clinical', relationship: 'Care team', phone: '555-0108', availability: 'Weekdays' },
+        { name: 'Luis G.', relationship: 'Sponsor', phone: '555-0120', availability: 'Evenings' }
+      ],
+      safetyPlan: [
+        { title: 'If cravings hit 8/10', action: 'Go to the community center, text sponsor, and avoid being alone for the first hour.' }
+      ],
+      milestones: [
+        { title: 'One full week of evening check-ins', targetDate: startOfUtcDay(7).toISOString(), status: 'in_progress' }
+      ]
+    },
+    create: {
+      consumerId: marcus.id,
+      summary: 'Marcus does best with structured post-shift support, fast outreach, and concrete coping steps before cravings spike.',
+      focusAreas: [
+        { title: 'Protect evenings', detail: 'Use the first 30 minutes after work to slow down, hydrate, and reset.' },
+        { title: 'Interrupt isolation', detail: 'Text sponsor or care team before skipping dinner or support contact.' }
+      ],
+      copingStrategies: [
+        { title: 'Car-to-home reset', detail: 'Sit in the car for two minutes, breathe, and name the next safe action.' },
+        { title: 'Short walking route', detail: 'Walk one block before entering the apartment if the urge feels sharp.' }
+      ],
+      reminders: [
+        { title: 'After-work check-in', schedule: 'Weekdays by 5:30 PM' }
+      ],
+      supportContacts: [
+        { name: 'Taylor Clinical', relationship: 'Care team', phone: '555-0108', availability: 'Weekdays' },
+        { name: 'Luis G.', relationship: 'Sponsor', phone: '555-0120', availability: 'Evenings' }
+      ],
+      safetyPlan: [
+        { title: 'If cravings hit 8/10', action: 'Go to the community center, text sponsor, and avoid being alone for the first hour.' }
+      ],
+      milestones: [
+        { title: 'One full week of evening check-ins', targetDate: startOfUtcDay(7).toISOString(), status: 'in_progress' }
+      ]
+    }
+  });
+
+  await prisma.recoveryPlan.upsert({
+    where: { consumerId: naomi.id },
+    update: {
+      summary: 'Naomi benefits from gentle check-ins, clearer daily structure, and quick recovery from missed appointments.',
+      focusAreas: [
+        { title: 'Restore daytime rhythm', detail: 'Anchor the morning with water, medication, and one message back to the team.' },
+        { title: 'Reduce missed care', detail: 'Prep transportation and reminders the night before appointments.' }
+      ],
+      copingStrategies: [
+        { title: 'Tiny next step', detail: 'Pick one 5-minute task when everything feels heavy.' },
+        { title: 'Grounding phrase', detail: 'Say out loud what is happening, what you need, and who can help.' }
+      ],
+      reminders: [
+        { title: 'Midday mood check', schedule: 'Daily at noon' },
+        { title: 'Appointment prep', schedule: 'Night before each visit' }
+      ],
+      supportContacts: [
+        { name: 'Taylor Clinical', relationship: 'Care team', phone: '555-0108', availability: 'Weekdays' },
+        { name: 'Kendra R.', relationship: 'Aunt', phone: '555-0133', availability: 'Afternoons' }
+      ],
+      safetyPlan: [
+        { title: 'If overwhelm shuts things down', action: 'Reply with one-word check-in, then call aunt or care team for the next small step.' }
+      ],
+      milestones: [
+        { title: 'Attend next two scheduled visits', targetDate: startOfUtcDay(10).toISOString(), status: 'planned' }
+      ]
+    },
+    create: {
+      consumerId: naomi.id,
+      summary: 'Naomi benefits from gentle check-ins, clearer daily structure, and quick recovery from missed appointments.',
+      focusAreas: [
+        { title: 'Restore daytime rhythm', detail: 'Anchor the morning with water, medication, and one message back to the team.' },
+        { title: 'Reduce missed care', detail: 'Prep transportation and reminders the night before appointments.' }
+      ],
+      copingStrategies: [
+        { title: 'Tiny next step', detail: 'Pick one 5-minute task when everything feels heavy.' },
+        { title: 'Grounding phrase', detail: 'Say out loud what is happening, what you need, and who can help.' }
+      ],
+      reminders: [
+        { title: 'Midday mood check', schedule: 'Daily at noon' },
+        { title: 'Appointment prep', schedule: 'Night before each visit' }
+      ],
+      supportContacts: [
+        { name: 'Taylor Clinical', relationship: 'Care team', phone: '555-0108', availability: 'Weekdays' },
+        { name: 'Kendra R.', relationship: 'Aunt', phone: '555-0133', availability: 'Afternoons' }
+      ],
+      safetyPlan: [
+        { title: 'If overwhelm shuts things down', action: 'Reply with one-word check-in, then call aunt or care team for the next small step.' }
+      ],
+      milestones: [
+        { title: 'Attend next two scheduled visits', targetDate: startOfUtcDay(10).toISOString(), status: 'planned' }
+      ]
+    }
+  });
+
+  const marcusCheckIns = await Promise.all([
+    upsertDailyCheckIn(marcus.id, {
+      checkInDate: startOfUtcDay(-2),
+      mood: 5,
+      cravings: 6,
+      stressLevel: 7,
+      sleepHours: 5.8,
+      sleepQuality: 3,
+      motivationLevel: 5,
+      treatmentAdherence: true,
+      difficultMoments: ['Long shift with conflict at work'],
+      copingToolsUsed: ['Breathing practice'],
+      wantsStaffFollowUp: false,
+      notes: 'Barely made it home without stopping. Stress stayed high through the night.',
+      gratitude: 'Still answered my sponsor text.'
+    }),
+    upsertDailyCheckIn(marcus.id, {
+      checkInDate: startOfUtcDay(-1),
+      mood: 4,
+      cravings: 8,
+      stressLevel: 8,
+      sleepHours: 4.9,
+      sleepQuality: 2,
+      motivationLevel: 4,
+      treatmentAdherence: true,
+      difficultMoments: ['Passed the liquor store after work', 'Skipped dinner'],
+      copingToolsUsed: ['Sat in the car and texted sponsor'],
+      wantsStaffFollowUp: true,
+      notes: 'Needed support yesterday evening. I stayed sober but it felt too close.',
+      gratitude: 'My sponsor picked up the phone.'
+    })
+  ]);
+
+  const naomiCheckIns = await Promise.all([
+    upsertDailyCheckIn(naomi.id, {
+      checkInDate: startOfUtcDay(-4),
+      mood: 5,
+      cravings: 2,
+      stressLevel: 6,
+      sleepHours: 5.1,
+      sleepQuality: 2,
+      motivationLevel: 4,
+      treatmentAdherence: false,
+      difficultMoments: ['Stayed in bed too long'],
+      copingToolsUsed: ['Texted aunt'],
+      wantsStaffFollowUp: false,
+      notes: 'Energy was low most of the day and I missed my morning routine.',
+      gratitude: 'My aunt reminding me to eat.'
+    }),
+    upsertDailyCheckIn(naomi.id, {
+      checkInDate: startOfUtcDay(-1),
+      mood: 3,
+      cravings: 3,
+      stressLevel: 7,
+      sleepHours: 4.6,
+      sleepQuality: 2,
+      motivationLevel: 3,
+      treatmentAdherence: false,
+      difficultMoments: ['Missed callback from clinic', 'Stayed isolated all afternoon'],
+      copingToolsUsed: ['Short grounding phrase'],
+      wantsStaffFollowUp: true,
+      notes: 'I am slipping into avoidance again and need help getting back on track.',
+      gratitude: 'I still sent one honest text.'
+    })
+  ]);
+
+  for (const [routineId, offsetDays] of [
+    [marcusMorningRoutine.id, -2],
+    [marcusSupportRoutine.id, -2],
+    [naomiSleepRoutine.id, -4]
+  ]) {
+    await prisma.routineCompletion.upsert({
+      where: {
+        routineId_completionDate: {
+          routineId,
+          completionDate: startOfUtcDay(offsetDays)
+        }
+      },
+      update: {},
+      create: {
+        routineId,
+        completionDate: startOfUtcDay(offsetDays)
+      }
+    });
+  }
+
+  await upsertJournalEntry(marcus.id, {
+    title: 'Almost isolated after work',
+    content: 'I wanted to disappear after the shift, but I told the truth and reached out before it turned into a bad night.',
+    moodScore: 4,
+    theme: 'after work risk',
+    sharedWithCareTeam: true
+  });
+
+  await upsertJournalEntry(naomi.id, {
+    title: 'Hard to restart after missing a day',
+    content: 'When I miss one thing it snowballs fast. I need smaller steps and fewer decisions on bad mornings.',
+    moodScore: 3,
+    theme: 'activation',
+    sharedWithCareTeam: true
+  });
+
+  await upsertMedication(marcus.id, {
+    medicationName: 'Gabapentin',
+    dosage: '300 mg',
+    schedule: 'Evening as prescribed'
+  });
+
+  await upsertMedication(naomi.id, {
+    medicationName: 'Sertraline',
+    dosage: '50 mg',
+    schedule: 'Each morning'
+  });
+
+  await upsertAppointment(organization.id, marcus.id, {
+    type: 'Case management follow-up',
+    status: 'scheduled',
+    startsAt: atUtcHour(startOfUtcDay(0), 16, 0),
+    endsAt: atUtcHour(startOfUtcDay(0), 16, 30)
+  });
+
+  await upsertAppointment(organization.id, naomi.id, {
+    type: 'Therapy re-engagement visit',
+    status: 'scheduled',
+    startsAt: atUtcHour(startOfUtcDay(1), 13, 0),
+    endsAt: atUtcHour(startOfUtcDay(1), 13, 45)
+  });
+
+  await upsertClinicalNote(tenant.id, organization.id, consumer.id, clinicalUser.id, {
+    noteType: 'progress',
+    title: 'Morning structure is helping',
+    body: 'Ava is using the morning check-in consistently and responds well to concrete recovery steps. Focus remains on maintaining routine during family stress.',
+    flaggedForFollowUp: false
+  });
+
+  await upsertClinicalNote(tenant.id, organization.id, marcus.id, clinicalUser.id, {
+    noteType: 'follow_up',
+    title: 'High-risk evening follow-up',
+    body: 'Marcus reported high cravings after work and asked for follow-up. Plan is same-day outreach plus sponsor coordination before the next shift ends.',
+    flaggedForFollowUp: true
+  });
+
+  await upsertClinicalNote(tenant.id, organization.id, naomi.id, clinicalUser.id, {
+    noteType: 'engagement',
+    title: 'Re-engagement support plan',
+    body: 'Naomi is showing avoidant patterns after missed calls and low energy days. Keep communication concrete, low-friction, and focused on the next appointment.',
+    flaggedForFollowUp: true
+  });
+
+  const avaLatestCheckIn = avaCheckIns.find((item) => item.checkInDate.getTime() === startOfUtcDay(0).getTime());
+  const marcusLatestCheckIn = marcusCheckIns.find((item) => item.checkInDate.getTime() === startOfUtcDay(-1).getTime());
+  const naomiLatestCheckIn = naomiCheckIns.find((item) => item.checkInDate.getTime() === startOfUtcDay(-1).getTime());
+
+  if (avaLatestCheckIn) {
+    await upsertCheckInReview(tenant.id, organization.id, consumer.id, clinicalUser.id, avaLatestCheckIn.id, {
+      status: 'reviewed',
+      followUpStatus: 'not_needed',
+      reviewNote: 'Consumer stabilized well after morning anxiety. No extra outreach needed today.',
+      riskFlagged: false,
+      reviewedAt: new Date(),
+      outreachCompletedAt: null
+    });
+  }
+
+  if (marcusLatestCheckIn) {
+    await upsertCheckInReview(tenant.id, organization.id, marcus.id, clinicalUser.id, marcusLatestCheckIn.id, {
+      status: 'needs_follow_up',
+      followUpStatus: 'planned',
+      reviewNote: 'Same-day follow-up scheduled before the evening commute. Monitor cravings after shift.',
+      riskFlagged: true,
+      reviewedAt: new Date(),
+      outreachCompletedAt: null
+    });
+  }
+
+  if (naomiLatestCheckIn) {
+    await upsertCheckInReview(tenant.id, organization.id, naomi.id, clinicalUser.id, naomiLatestCheckIn.id, {
+      status: 'pending',
+      followUpStatus: 'needed',
+      reviewNote: 'Needs call back and appointment reminder. Keep next step small and concrete.',
+      riskFlagged: true,
+      reviewedAt: null,
+      outreachCompletedAt: null
+    });
+  }
+
   console.log(JSON.stringify({
     seeded: true,
     tenantId: tenant.id,
     organizationId: organization.id,
     adminUserId: upsertedUsers[0]?.id ?? null,
+    clinicalUserId: clinicalUser.id,
     consumerExperience: {
       consumerId: consumer.id,
       goalsSeeded: 3,
       routinesSeeded: 3,
       checkInsSeeded: checkInSeeds.length,
       journalEntriesSeeded: journalSeeds.length
+    },
+    clinicalExperience: {
+      caseloadConsumers: 3,
+      noteExamples: 3,
+      reviewItemsSeeded: 3,
+      followUpQueueConsumers: 2
     },
     sampleAccounts: seededUsers.map((user) => ({
       email: user.email,

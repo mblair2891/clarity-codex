@@ -55,6 +55,8 @@ model Tenant {
   organizations  Organization[]
   users          User[]
   consumers      Consumer[]
+  clinicalNotes  ClinicalNote[]
+  checkInReviews CheckInReview[]
   payers         Payer[]
   promptRegistry PromptRegistry[]
   aiRuns         AiRun[]
@@ -70,6 +72,8 @@ model Organization {
   taxId        String?
   memberships  Membership[]
   consumers    Consumer[]
+  clinicalNotes ClinicalNote[]
+  checkInReviews CheckInReview[]
   appointments Appointment[]
   groups       GroupSession[]
   encounters   Encounter[]
@@ -89,6 +93,8 @@ model User {
   isActive           Boolean      @default(true)
   mustChangePassword Boolean      @default(false)
   memberships        Membership[]
+  authoredClinicalNotes ClinicalNote[]
+  completedCheckInReviews CheckInReview[]
   auditLogs          AuditLog[]
   aiRuns             AiRun[]
   createdAt          DateTime     @default(now())
@@ -129,6 +135,8 @@ model Consumer {
   treatmentPlans      TreatmentPlan[]
   medications         MedicationRecord[]
   appointments        Appointment[]
+  clinicalNotes       ClinicalNote[]
+  checkInReviews      CheckInReview[]
   encounters          Encounter[]
   coverages           Coverage[]
   invoices            Invoice[]
@@ -140,6 +148,7 @@ model DailyCheckIn {
   id                    String   @id @default(cuid())
   consumerId            String
   consumer              Consumer @relation(fields: [consumerId], references: [id])
+  review                CheckInReview?
   checkInDate           DateTime
   mood                  Int
   cravings              Int
@@ -158,6 +167,31 @@ model DailyCheckIn {
   @@unique([consumerId, checkInDate])
 }
 
+model CheckInReview {
+  id                 String       @id @default(cuid())
+  checkInId          String       @unique
+  checkIn            DailyCheckIn @relation(fields: [checkInId], references: [id])
+  tenantId           String
+  tenant             Tenant       @relation(fields: [tenantId], references: [id])
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  consumerId         String
+  consumer           Consumer     @relation(fields: [consumerId], references: [id])
+  reviewerUserId     String?
+  reviewer           User?        @relation(fields: [reviewerUserId], references: [id])
+  status             String       @default("pending")
+  followUpStatus     String       @default("not_needed")
+  reviewNote         String?
+  reviewedAt         DateTime?
+  outreachCompletedAt DateTime?
+  riskFlagged        Boolean      @default(false)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@index([consumerId, updatedAt])
+  @@index([organizationId, status])
+}
+
 model JournalEntry {
   id         String   @id @default(cuid())
   consumerId String
@@ -169,6 +203,27 @@ model JournalEntry {
   sharedWithCareTeam Boolean @default(false)
   aiSummary  String?
   createdAt  DateTime @default(now())
+}
+
+model ClinicalNote {
+  id                 String       @id @default(cuid())
+  tenantId           String
+  tenant             Tenant       @relation(fields: [tenantId], references: [id])
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  consumerId         String
+  consumer           Consumer     @relation(fields: [consumerId], references: [id])
+  authorUserId       String
+  author             User         @relation(fields: [authorUserId], references: [id])
+  noteType           String       @default("progress")
+  title              String?
+  body               String
+  flaggedForFollowUp Boolean      @default(false)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@index([consumerId, createdAt])
+  @@index([organizationId, createdAt])
 }
 
 model Goal {

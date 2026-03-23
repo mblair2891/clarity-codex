@@ -88,6 +88,11 @@ export function RcmDashboard() {
       });
   }, [apiBaseUrl, apiBaseUrlError, router]);
 
+  function handleLogout() {
+    clearStoredToken();
+    router.replace('/login');
+  }
+
   return (
     <RoleShell role={getDisplayRoleForShell(me?.user.role ?? 'billing')} title="RCM Workbench">
       <section className="grid">
@@ -114,6 +119,11 @@ export function RcmDashboard() {
           <p className="muted">
             {me ? `Tenant: ${me.tenant.name}` : 'Loading tenant context.'}
           </p>
+          <div style={{ marginTop: 12 }}>
+            <button type="button" className="secondaryButton" onClick={handleLogout}>
+              Log out
+            </button>
+          </div>
         </article>
         <article className="card">
           <h2 className="sectionTitle">Top denial patterns</h2>
