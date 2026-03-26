@@ -636,16 +636,6 @@ export async function adminRoutes(app: FastifyInstance) {
         organizationName: item.organization.name,
         userName: item.author.fullName,
         consumerName: `${item.consumer.firstName} ${item.consumer.lastName}`
-      })),
-      ...users.slice(0, 10).map((item) => ({
-        id: `user-${item.id}`,
-        type: 'user',
-        title: `${item.fullName} is in the beta roster`,
-        detail: `${item.role} • ${item.email}`,
-        at: item.createdAt,
-        organizationName: item.memberships[0]?.organization.name ?? null,
-        userName: item.fullName,
-        consumerName: item.consumer ? `${item.consumer.firstName} ${item.consumer.lastName}` : null
       }))
     ]
       .sort((left, right) => right.at.getTime() - left.at.getTime())

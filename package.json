@@ -20,6 +20,7 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:migrate:status": "prisma migrate status",
     "db:seed": "node scripts/seed-beta.mjs",
+    "db:cleanup": "node scripts/cleanup-beta-data.mjs",
     "db:bootstrap-admin": "node scripts/bootstrap-admin.mjs"
   },
   "devDependencies": {

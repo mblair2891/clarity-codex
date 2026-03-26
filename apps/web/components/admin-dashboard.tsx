@@ -818,9 +818,9 @@ export function AdminDashboard() {
                 <span className="muted">{dashboard?.primaryOrganization?.npi ? `NPI ${dashboard.primaryOrganization.npi}` : 'Organization-scoped admin access'}</span>
               </div>
               <div className="listItemCard">
-                <strong>Seeded consumer profiles</strong>
+                <strong>Consumer profiles in scope</strong>
                 <span className="metric" style={{ fontSize: 24 }}>{dashboard?.consumers.length ?? 0}</span>
-                <span className="muted">Current demo population available for beta workflows</span>
+                <span className="muted">Profiles currently present in the beta environment</span>
               </div>
             </div>
           </article>

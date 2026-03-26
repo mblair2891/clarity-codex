@@ -5,6 +5,7 @@ const prisma = new PrismaClient();
 
 async function main() {
   const tenantSlug = process.env.BOOTSTRAP_TENANT_SLUG ?? 'beta-demo';
+  const tenantName = process.env.BOOTSTRAP_TENANT_NAME ?? 'Clarity Beta';
   const adminEmail = process.env.BOOTSTRAP_ADMIN_EMAIL;
   const adminName = process.env.BOOTSTRAP_ADMIN_NAME ?? 'Beta Admin';
   const adminPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD;
@@ -17,71 +18,54 @@ async function main() {
     throw new Error('BOOTSTRAP_ADMIN_PASSWORD is required.');
   }
 
-  const tenant = await prisma.tenant.findUnique({
+  const normalizedAdminEmail = adminEmail.trim().toLowerCase();
+  const trimmedAdminName = adminName.trim();
+
+  const tenant = await prisma.tenant.upsert({
     where: { slug: tenantSlug },
-    include: {
-      organizations: {
-        take: 1,
-        orderBy: { createdAt: 'asc' }
-      }
+    update: {
+      name: tenantName
+    },
+    create: {
+      slug: tenantSlug,
+      name: tenantName
     }
   });
-
-  if (!tenant) {
-    throw new Error(`Tenant with slug "${tenantSlug}" was not found.`);
-  }
 
   const admin = await prisma.user.upsert({
     where: {
       tenantId_email: {
         tenantId: tenant.id,
-        email: adminEmail
+        email: normalizedAdminEmail
       }
     },
     update: {
-      fullName: adminName,
+      fullName: trimmedAdminName,
       role: 'platform_admin',
       passwordHash: await hashPassword(adminPassword),
       isActive: true,
-      mustChangePassword: false
+      mustChangePassword: false,
+      consumerId: null
     },
     create: {
       tenantId: tenant.id,
-      email: adminEmail,
-      fullName: adminName,
+      email: normalizedAdminEmail,
+      fullName: trimmedAdminName,
       role: 'platform_admin',
       passwordHash: await hashPassword(adminPassword),
       isActive: true,
-      mustChangePassword: false
+      mustChangePassword: false,
+      consumerId: null
     }
   });
-
-  const primaryOrganization = tenant.organizations[0];
-
-  if (primaryOrganization) {
-    const membership = await prisma.membership.findFirst({
-      where: {
-        userId: admin.id,
-        organizationId: primaryOrganization.id
-      }
-    });
-
-    if (!membership) {
-      await prisma.membership.create({
-        data: {
-          userId: admin.id,
-          organizationId: primaryOrganization.id,
-          role: 'org_admin'
-        }
-      });
-    }
-  }
 
   console.log(JSON.stringify({
     bootstrapped: true,
     tenantId: tenant.id,
+    tenantSlug: tenant.slug,
     adminUserId: admin.id,
-    organizationId: primaryOrganization?.id ?? null
+    adminEmail: admin.email,
+    organizationId: null
   }, null, 2));
 }
 
