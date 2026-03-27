@@ -1,8 +1,10 @@
 import type { ConditionStatus, Prisma, Role } from '@prisma/client';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { assertOrganizationAccess, getOrgWhere, resolveOrganizationIdForWrite } from '../lib/access/org-scope.js';
+import { permissions } from '../lib/access/permissions.js';
+import { requireRequestAccess, requireRoutePermission } from '../lib/access/route-permissions.js';
 import { prisma } from '../lib/db.js';
-import { clinicalAccessRoles } from '../lib/roles.js';
 import { RiskService } from '../services/risk.service.js';
 
 const rosterQuerySchema = z.object({
@@ -36,7 +38,7 @@ const planUpdateSchema = z.object({
   recoveryPlanSummary: z.string().max(3000).nullable().optional()
 });
 
-type ClinicalAuth = NonNullable<FastifyRequest['auth']>;
+type ClinicalAccess = NonNullable<FastifyRequest['access']>;
 
 function readJsonArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
@@ -46,23 +48,15 @@ function parseSearch(value?: string) {
   return value?.trim().toLowerCase() ?? '';
 }
 
-function getConsumerScope(auth: ClinicalAuth): Prisma.ConsumerWhereInput {
-  if (auth.role === 'platform_admin' && auth.organizationIds.length === 0) {
-    return {
-      tenantId: auth.tenantId
-    };
-  }
-
+function getConsumerScope(access: ClinicalAccess): Prisma.ConsumerWhereInput {
   return {
-    tenantId: auth.tenantId,
-    organizationId: {
-      in: auth.organizationIds
-    }
+    tenantId: access.tenantId,
+    ...getOrgWhere(access)
   };
 }
 
-function getCheckInScope(auth: ClinicalAuth): Prisma.DailyCheckInWhereInput {
-  const consumerScope = getConsumerScope(auth);
+function getCheckInScope(access: ClinicalAccess): Prisma.DailyCheckInWhereInput {
+  const consumerScope = getConsumerScope(access);
 
   return {
     consumer: consumerScope
@@ -70,17 +64,11 @@ function getCheckInScope(auth: ClinicalAuth): Prisma.DailyCheckInWhereInput {
 }
 
 async function requireClinicalContext(app: FastifyInstance, request: FastifyRequest) {
-  await app.verifyTenantRole(request, clinicalAccessRoles);
-
-  const auth = request.auth;
-  if (!auth) {
-    const error = new Error('Authentication required.') as Error & { statusCode?: number };
-    error.statusCode = 401;
-    throw error;
-  }
+  await app.authenticateRequest(request);
+  const access = requireRequestAccess(request);
 
   const user = await prisma.user.findUnique({
-    where: { id: auth.userId },
+    where: { id: access.userId },
     include: {
       memberships: {
         include: {
@@ -98,16 +86,16 @@ async function requireClinicalContext(app: FastifyInstance, request: FastifyRequ
   }
 
   return {
-    auth,
+    access,
     user
   };
 }
 
-async function loadAuthorizedConsumer(auth: ClinicalAuth, consumerId: string) {
+async function loadAuthorizedConsumer(access: ClinicalAccess, consumerId: string) {
   return prisma.consumer.findFirst({
     where: {
       id: consumerId,
-      ...getConsumerScope(auth)
+      ...getConsumerScope(access)
     },
     include: {
       organization: true
@@ -185,7 +173,8 @@ function buildTaskLabel(appointment: { type: string; startsAt: Date }) {
 
 export async function clinicalRoutes(app: FastifyInstance) {
   app.get('/v1/clinical/dashboard', async (request) => {
-    const { auth, user } = await requireClinicalContext(app, request);
+    const { access, user } = await requireClinicalContext(app, request);
+    requireRoutePermission(request, permissions.clinicalConsumersRead);
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
     const tomorrowStart = new Date(todayStart);
@@ -194,7 +183,7 @@ export async function clinicalRoutes(app: FastifyInstance) {
     sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 6);
 
     const consumers = await prisma.consumer.findMany({
-      where: getConsumerScope(auth),
+      where: getConsumerScope(access),
       orderBy: [
         { lastName: 'asc' },
         { firstName: 'asc' }
@@ -436,7 +425,8 @@ export async function clinicalRoutes(app: FastifyInstance) {
   });
 
   app.get('/v1/clinical/roster', async (request) => {
-    const { auth } = await requireClinicalContext(app, request);
+    const { access } = await requireClinicalContext(app, request);
+    requireRoutePermission(request, permissions.clinicalConsumersRead);
     const { q, filter } = rosterQuerySchema.parse(request.query);
     const search = parseSearch(q);
     const sevenDaysAgo = new Date();
@@ -444,7 +434,7 @@ export async function clinicalRoutes(app: FastifyInstance) {
     sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 6);
 
     const consumers = await prisma.consumer.findMany({
-      where: getConsumerScope(auth),
+      where: getConsumerScope(access),
       orderBy: [
         { lastName: 'asc' },
         { firstName: 'asc' }
@@ -572,7 +562,8 @@ export async function clinicalRoutes(app: FastifyInstance) {
   });
 
   app.get('/v1/clinical/consumers/:consumerId', async (request, reply) => {
-    const { auth } = await requireClinicalContext(app, request);
+    const { access } = await requireClinicalContext(app, request);
+    requireRoutePermission(request, permissions.clinicalConsumersRead);
     const params = z.object({ consumerId: z.string().min(1) }).parse(request.params);
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setUTCHours(0, 0, 0, 0);
@@ -581,7 +572,7 @@ export async function clinicalRoutes(app: FastifyInstance) {
     const consumer = await prisma.consumer.findFirst({
       where: {
         id: params.consumerId,
-        ...getConsumerScope(auth)
+        ...getConsumerScope(access)
       },
       include: {
         organization: true,
@@ -775,21 +766,29 @@ export async function clinicalRoutes(app: FastifyInstance) {
   });
 
   app.post('/v1/clinical/consumers/:consumerId/notes', async (request, reply) => {
-    const { auth } = await requireClinicalContext(app, request);
+    const { access } = await requireClinicalContext(app, request);
+    requireRoutePermission(request, permissions.clinicalNotesWrite);
     const params = z.object({ consumerId: z.string().min(1) }).parse(request.params);
     const payload = noteSchema.parse(request.body);
-    const consumer = await loadAuthorizedConsumer(auth, params.consumerId);
+    const consumer = await loadAuthorizedConsumer(access, params.consumerId);
 
     if (!consumer) {
       return reply.code(404).send({ message: 'Consumer was not found in your clinical scope.' });
     }
 
+    const organizationId = resolveOrganizationIdForWrite(
+      access,
+      consumer.organizationId,
+      'Select an active organization before creating a clinical note.'
+    );
+    assertOrganizationAccess(access, consumer.organizationId, 'Consumer is outside the active organization.');
+
     const note = await prisma.clinicalNote.create({
       data: {
-        tenantId: auth.tenantId,
-        organizationId: consumer.organizationId ?? auth.organizationIds[0] ?? consumer.organization?.id ?? '',
+        tenantId: access.tenantId,
+        organizationId,
         consumerId: consumer.id,
-        authorUserId: auth.userId,
+        authorUserId: access.userId,
         noteType: payload.noteType,
         title: payload.title?.trim() || null,
         body: payload.body.trim(),
@@ -821,14 +820,17 @@ export async function clinicalRoutes(app: FastifyInstance) {
   });
 
   app.patch('/v1/clinical/consumers/:consumerId/plan', async (request, reply) => {
-    const { auth } = await requireClinicalContext(app, request);
+    const { access } = await requireClinicalContext(app, request);
+    requireRoutePermission(request, permissions.clinicalPlansWrite);
     const params = z.object({ consumerId: z.string().min(1) }).parse(request.params);
     const payload = planUpdateSchema.parse(request.body);
-    const consumer = await loadAuthorizedConsumer(auth, params.consumerId);
+    const consumer = await loadAuthorizedConsumer(access, params.consumerId);
 
     if (!consumer) {
       return reply.code(404).send({ message: 'Consumer was not found in your clinical scope.' });
     }
+
+    assertOrganizationAccess(access, consumer.organizationId, 'Consumer is outside the active organization.');
 
     await prisma.$transaction(async (transaction) => {
       await transaction.consumer.update({
@@ -862,7 +864,8 @@ export async function clinicalRoutes(app: FastifyInstance) {
   });
 
   app.get('/v1/clinical/check-ins', async (request) => {
-    const { auth } = await requireClinicalContext(app, request);
+    const { access } = await requireClinicalContext(app, request);
+    requireRoutePermission(request, permissions.clinicalCheckInsRead);
     const { filter } = checkInQuerySchema.parse(request.query);
     const fourteenDaysAgo = new Date();
     fourteenDaysAgo.setUTCHours(0, 0, 0, 0);
@@ -870,7 +873,7 @@ export async function clinicalRoutes(app: FastifyInstance) {
 
     const items = await prisma.dailyCheckIn.findMany({
       where: {
-        ...getCheckInScope(auth),
+        ...getCheckInScope(access),
         checkInDate: {
           gte: fourteenDaysAgo
         }
@@ -948,13 +951,14 @@ export async function clinicalRoutes(app: FastifyInstance) {
   });
 
   app.get('/v1/clinical/check-ins/:checkInId', async (request, reply) => {
-    const { auth } = await requireClinicalContext(app, request);
+    const { access } = await requireClinicalContext(app, request);
+    requireRoutePermission(request, permissions.clinicalCheckInsRead);
     const params = z.object({ checkInId: z.string().min(1) }).parse(request.params);
 
     const checkIn = await prisma.dailyCheckIn.findFirst({
       where: {
         id: params.checkInId,
-        ...getCheckInScope(auth)
+        ...getCheckInScope(access)
       },
       include: {
         consumer: {
@@ -1024,14 +1028,15 @@ export async function clinicalRoutes(app: FastifyInstance) {
   });
 
   app.patch('/v1/clinical/check-ins/:checkInId/review', async (request, reply) => {
-    const { auth } = await requireClinicalContext(app, request);
+    const { access } = await requireClinicalContext(app, request);
+    requireRoutePermission(request, permissions.clinicalCheckInsReview);
     const params = z.object({ checkInId: z.string().min(1) }).parse(request.params);
     const payload = reviewSchema.parse(request.body);
 
     const checkIn = await prisma.dailyCheckIn.findFirst({
       where: {
         id: params.checkInId,
-        ...getCheckInScope(auth)
+        ...getCheckInScope(access)
       },
       include: {
         consumer: true
@@ -1042,11 +1047,13 @@ export async function clinicalRoutes(app: FastifyInstance) {
       return reply.code(404).send({ message: 'Check-in was not found in your clinical scope.' });
     }
 
-    const organizationId = checkIn.consumer.organizationId ?? auth.organizationIds[0];
+    assertOrganizationAccess(access, checkIn.consumer.organizationId, 'Check-in consumer is outside the active organization.');
 
-    if (!organizationId) {
-      return reply.code(400).send({ message: 'This consumer is not assigned to an organization.' });
-    }
+    const organizationId = resolveOrganizationIdForWrite(
+      access,
+      checkIn.consumer.organizationId,
+      'Select an active organization before reviewing this check-in.'
+    );
 
     const nextStatus = payload.status
       ?? (
@@ -1061,10 +1068,10 @@ export async function clinicalRoutes(app: FastifyInstance) {
       },
       create: {
         checkInId: checkIn.id,
-        tenantId: auth.tenantId,
+        tenantId: access.tenantId,
         organizationId,
         consumerId: checkIn.consumerId,
-        reviewerUserId: auth.userId,
+        reviewerUserId: access.userId,
         status: nextStatus,
         followUpStatus: payload.followUpStatus ?? (checkIn.wantsStaffFollowUp ? 'needed' : 'not_needed'),
         reviewNote: payload.reviewNote ?? null,
@@ -1073,7 +1080,7 @@ export async function clinicalRoutes(app: FastifyInstance) {
         outreachCompletedAt: payload.outreachCompleted ? new Date() : null
       },
       update: {
-        reviewerUserId: auth.userId,
+        reviewerUserId: access.userId,
         status: nextStatus,
         followUpStatus: payload.followUpStatus
           ?? undefined,

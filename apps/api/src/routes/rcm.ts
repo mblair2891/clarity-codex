@@ -1,8 +1,10 @@
 import type { BillingWorkItemStatus, Prisma } from '@prisma/client';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { assertOrganizationAccess, getOrgWhere, requireActiveOrganization } from '../lib/access/org-scope.js';
+import { permissions } from '../lib/access/permissions.js';
+import { requireRequestAccess, requireRoutePermission } from '../lib/access/route-permissions.js';
 import { prisma } from '../lib/db.js';
-import { rcmAccessRoles } from '../lib/roles.js';
 
 const queueFilterValues = [
   'all',
@@ -62,7 +64,7 @@ const noteSchema = z.object({
   noteType: z.string().min(2).max(40).optional().default('billing_note')
 });
 
-type RcmAuth = NonNullable<FastifyRequest['auth']>;
+type RcmAccess = NonNullable<FastifyRequest['access']>;
 
 type BillingConsumerRecord = Prisma.ConsumerGetPayload<{
   include: {
@@ -161,77 +163,36 @@ function normalizeOptionalString(value?: string | null) {
   return trimmed ? trimmed : null;
 }
 
-function getScopedOrganizationIds(auth: RcmAuth) {
-  if (auth.role === 'platform_admin') {
-    return undefined;
-  }
-
-  return auth.organizationIds;
-}
-
-function getScopedConsumerWhere(auth: RcmAuth): Prisma.ConsumerWhereInput {
-  const organizationIds = getScopedOrganizationIds(auth);
-
-  if (!organizationIds || organizationIds.length === 0) {
-    return {
-      tenantId: auth.tenantId
-    };
-  }
-
+function getScopedConsumerWhere(access: RcmAccess): Prisma.ConsumerWhereInput {
   return {
-    tenantId: auth.tenantId,
-    organizationId: {
-      in: organizationIds
-    }
+    tenantId: access.tenantId,
+    ...getOrgWhere(access)
   };
 }
 
-function getScopedOrganizationWhere(auth: RcmAuth): Prisma.OrganizationWhereInput {
-  const organizationIds = getScopedOrganizationIds(auth);
-
-  if (!organizationIds || organizationIds.length === 0) {
-    return {
-      tenantId: auth.tenantId
-    };
-  }
-
+function getScopedOrganizationWhere(access: RcmAccess): Prisma.OrganizationWhereInput {
   return {
-    tenantId: auth.tenantId,
-    id: {
-      in: organizationIds
-    }
+    tenantId: access.tenantId,
+    ...getOrgWhere(access, {
+      organizationField: 'id'
+    })
   };
 }
 
-function getScopedWorkItemWhere(auth: RcmAuth): Prisma.BillingWorkItemWhereInput {
-  const organizationIds = getScopedOrganizationIds(auth);
-
-  if (!organizationIds || organizationIds.length === 0) {
-    return {
-      tenantId: auth.tenantId
-    };
-  }
-
+function getScopedWorkItemWhere(access: RcmAccess): Prisma.BillingWorkItemWhereInput {
   return {
-    tenantId: auth.tenantId,
-    organizationId: {
-      in: organizationIds
-    }
+    tenantId: access.tenantId,
+    ...getOrgWhere(access)
   };
 }
 
 async function requireRcmContext(app: FastifyInstance, request: FastifyRequest) {
-  await app.verifyTenantRole(request, rcmAccessRoles);
-
-  const auth = request.auth;
-  if (!auth) {
-    const error = new Error('Authentication required.') as Error & { statusCode?: number };
-    error.statusCode = 401;
-    throw error;
-  }
+  await app.authenticateRequest(request);
+  const access = requireRequestAccess(request);
+  requireActiveOrganization(access, 'Select an active organization before using revenue cycle tools.');
 
   const user = await prisma.user.findUnique({
-    where: { id: auth.userId },
+    where: { id: access.userId },
     include: {
       memberships: {
         include: {
@@ -249,16 +210,16 @@ async function requireRcmContext(app: FastifyInstance, request: FastifyRequest) 
   }
 
   return {
-    auth,
+    access,
     user
   };
 }
 
-async function loadScopedConsumer(auth: RcmAuth, consumerId: string) {
+async function loadScopedConsumer(access: RcmAccess, consumerId: string) {
   return prisma.consumer.findFirst({
     where: {
       id: consumerId,
-      ...getScopedConsumerWhere(auth)
+      ...getScopedConsumerWhere(access)
     },
     include: {
       organization: true,
@@ -722,11 +683,12 @@ function serializeWorkItem(workItem: BillingConsumerRecord['billingWorkItems'][n
 
 export async function rcmRoutes(app: FastifyInstance) {
   app.get('/v1/rcm/dashboard', async (request) => {
-    const { auth, user } = await requireRcmContext(app, request);
+    const { access, user } = await requireRcmContext(app, request);
+    requireRoutePermission(request, permissions.billingWorkItemsRead);
 
     const [consumers, workItems] = await prisma.$transaction([
       prisma.consumer.findMany({
-        where: getScopedConsumerWhere(auth),
+        where: getScopedConsumerWhere(access),
         include: {
           organization: true,
           userAccount: true,
@@ -803,7 +765,7 @@ export async function rcmRoutes(app: FastifyInstance) {
         }
       }),
       prisma.billingWorkItem.findMany({
-        where: getScopedWorkItemWhere(auth),
+        where: getScopedWorkItemWhere(access),
         include: {
           consumer: true,
           organization: true,
@@ -847,11 +809,12 @@ export async function rcmRoutes(app: FastifyInstance) {
   });
 
   app.get('/v1/rcm/queue', async (request) => {
-    const { auth } = await requireRcmContext(app, request);
+    const { access } = await requireRcmContext(app, request);
+    requireRoutePermission(request, permissions.billingWorkItemsRead);
     const query = queueQuerySchema.parse(request.query);
 
     const consumers = await prisma.consumer.findMany({
-      where: getScopedConsumerWhere(auth),
+      where: getScopedConsumerWhere(access),
       include: {
         organization: true,
         userAccount: true,
@@ -942,9 +905,10 @@ export async function rcmRoutes(app: FastifyInstance) {
   });
 
   app.get('/v1/rcm/accounts/:consumerId', async (request, reply) => {
-    const { auth } = await requireRcmContext(app, request);
+    const { access } = await requireRcmContext(app, request);
+    requireRoutePermission(request, permissions.billingWorkItemsRead);
     const params = consumerParamsSchema.parse(request.params);
-    const consumer = await loadScopedConsumer(auth, params.consumerId);
+    const consumer = await loadScopedConsumer(access, params.consumerId);
 
     if (!consumer) {
       return reply.code(404).send({ message: 'Billing account was not found in your scope.' });
@@ -1087,13 +1051,18 @@ export async function rcmRoutes(app: FastifyInstance) {
   });
 
   app.post('/v1/rcm/work-items', async (request, reply) => {
-    const { auth, user } = await requireRcmContext(app, request);
+    const { access, user } = await requireRcmContext(app, request);
+    requireRoutePermission(request, permissions.billingWorkItemsWrite);
     const payload = workItemSchema.parse(request.body);
-    const consumer = await loadScopedConsumer(auth, payload.consumerId);
+    if ((payload.status ?? 'draft') === 'submitted') {
+      requireRoutePermission(request, permissions.billingClaimsSubmit);
+    }
+    const consumer = await loadScopedConsumer(access, payload.consumerId);
 
-    if (!consumer || !consumer.organizationId) {
+    if (!consumer) {
       return reply.code(404).send({ message: 'Consumer billing account was not found in your scope.' });
     }
+    const organizationId = assertOrganizationAccess(access, consumer.organizationId, 'Consumer billing account is outside the active organization.');
 
     const coverage = payload.coverageId
       ? consumer.coverages.find((item) => item.id === payload.coverageId) ?? null
@@ -1121,8 +1090,8 @@ export async function rcmRoutes(app: FastifyInstance) {
     const created = await prisma.$transaction(async (transaction) => {
       const workItem = await transaction.billingWorkItem.create({
         data: {
-          tenantId: auth.tenantId,
-          organizationId: consumer.organizationId!,
+          tenantId: access.tenantId,
+          organizationId,
           consumerId: consumer.id,
           coverageId: coverage?.id,
           encounterId: encounter?.id,
@@ -1143,6 +1112,7 @@ export async function rcmRoutes(app: FastifyInstance) {
 
       await transaction.billingWorkItemActivity.create({
         data: {
+          organizationId,
           workItemId: workItem.id,
           actorUserId: user.id,
           action: 'created',
@@ -1161,24 +1131,30 @@ export async function rcmRoutes(app: FastifyInstance) {
   });
 
   app.patch('/v1/rcm/work-items/:workItemId', async (request, reply) => {
-    const { auth, user } = await requireRcmContext(app, request);
+    const { access, user } = await requireRcmContext(app, request);
+    requireRoutePermission(request, permissions.billingWorkItemsWrite);
     const params = workItemParamsSchema.parse(request.params);
     const payload = workItemUpdateSchema.parse(request.body);
+    if (payload.status === 'submitted') {
+      requireRoutePermission(request, permissions.billingClaimsSubmit);
+    }
     const existing = await prisma.billingWorkItem.findFirst({
       where: {
         id: params.workItemId,
-        ...getScopedWorkItemWhere(auth)
+        ...getScopedWorkItemWhere(access)
       }
     });
 
     if (!existing) {
       return reply.code(404).send({ message: 'Billing work item was not found in your scope.' });
     }
+    const organizationId = assertOrganizationAccess(access, existing.organizationId, 'Billing work item is outside the active organization.');
 
-    const consumer = await loadScopedConsumer(auth, existing.consumerId);
+    const consumer = await loadScopedConsumer(access, existing.consumerId);
     if (!consumer) {
       return reply.code(404).send({ message: 'Linked consumer account was not found.' });
     }
+    assertOrganizationAccess(access, consumer.organizationId, 'Linked consumer account is outside the active organization.');
 
     const coverageId = payload.coverageId === undefined ? existing.coverageId : payload.coverageId;
     const encounterId = payload.encounterId === undefined ? existing.encounterId : payload.encounterId;
@@ -1230,6 +1206,7 @@ export async function rcmRoutes(app: FastifyInstance) {
 
       await transaction.billingWorkItemActivity.create({
         data: {
+          organizationId,
           workItemId: existing.id,
           actorUserId: user.id,
           action: status !== existing.status ? 'status_changed' : 'updated',
@@ -1247,25 +1224,27 @@ export async function rcmRoutes(app: FastifyInstance) {
   });
 
   app.post('/v1/rcm/work-items/:workItemId/notes', async (request, reply) => {
-    const { auth, user } = await requireRcmContext(app, request);
+    const { access, user } = await requireRcmContext(app, request);
+    requireRoutePermission(request, permissions.billingWorkItemsWrite);
     const params = workItemParamsSchema.parse(request.params);
     const payload = noteSchema.parse(request.body);
     const workItem = await prisma.billingWorkItem.findFirst({
       where: {
         id: params.workItemId,
-        ...getScopedWorkItemWhere(auth)
+        ...getScopedWorkItemWhere(access)
       }
     });
 
     if (!workItem) {
       return reply.code(404).send({ message: 'Billing work item was not found in your scope.' });
     }
+    const organizationId = assertOrganizationAccess(access, workItem.organizationId, 'Billing work item is outside the active organization.');
 
     await prisma.$transaction(async (transaction) => {
       await transaction.billingNote.create({
         data: {
           tenantId: workItem.tenantId,
-          organizationId: workItem.organizationId,
+          organizationId,
           consumerId: workItem.consumerId,
           workItemId: workItem.id,
           authorUserId: user.id,
@@ -1276,6 +1255,7 @@ export async function rcmRoutes(app: FastifyInstance) {
 
       await transaction.billingWorkItemActivity.create({
         data: {
+          organizationId,
           workItemId: workItem.id,
           actorUserId: user.id,
           action: 'note_added',
@@ -1289,19 +1269,21 @@ export async function rcmRoutes(app: FastifyInstance) {
   });
 
   app.post('/v1/rcm/accounts/:consumerId/notes', async (request, reply) => {
-    const { auth, user } = await requireRcmContext(app, request);
+    const { access, user } = await requireRcmContext(app, request);
+    requireRoutePermission(request, permissions.billingWorkItemsWrite);
     const params = consumerParamsSchema.parse(request.params);
     const payload = noteSchema.parse(request.body);
-    const consumer = await loadScopedConsumer(auth, params.consumerId);
+    const consumer = await loadScopedConsumer(access, params.consumerId);
 
-    if (!consumer || !consumer.organizationId) {
+    if (!consumer) {
       return reply.code(404).send({ message: 'Billing account was not found in your scope.' });
     }
+    const organizationId = assertOrganizationAccess(access, consumer.organizationId, 'Billing account is outside the active organization.');
 
     await prisma.billingNote.create({
       data: {
-        tenantId: auth.tenantId,
-        organizationId: consumer.organizationId,
+        tenantId: access.tenantId,
+        organizationId,
         consumerId: consumer.id,
         authorUserId: user.id,
         noteType: payload.noteType,

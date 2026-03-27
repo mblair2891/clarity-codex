@@ -2,9 +2,12 @@ import type { Prisma, Role } from '@prisma/client';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { env } from '../config/env.js';
+import { getOrgWhere, hasPlatformRole, requireActiveOrganization } from '../lib/access/org-scope.js';
+import { permissions } from '../lib/access/permissions.js';
+import { requireRequestAccess, requireRoutePermission } from '../lib/access/route-permissions.js';
 import { prisma } from '../lib/db.js';
 import { hashPassword } from '../lib/password.js';
-import { adminAccessRoles, canAssignRole, isClinicalRole, supportedBetaRoles } from '../lib/roles.js';
+import { isClinicalRole, supportedBetaRoles } from '../lib/roles.js';
 import { ResetSystemService } from '../services/reset-system.service.js';
 
 const createUserSchema = z.object({
@@ -41,7 +44,7 @@ const resetSystemSchema = z.object({
   confirmationText: z.string().trim().min(1)
 });
 
-type AdminAuth = NonNullable<FastifyRequest['auth']>;
+type AdminAccess = NonNullable<FastifyRequest['access']>;
 
 function splitFullName(fullName: string) {
   const normalized = fullName.trim().replace(/\s+/g, ' ');
@@ -53,140 +56,82 @@ function splitFullName(fullName: string) {
   };
 }
 
-function getAdminOrganizationScope(auth: AdminAuth) {
-  if (auth.role === 'platform_admin') {
-    return undefined;
-  }
-
-  return auth.organizationIds;
-}
-
-function getUserScopeWhere(auth: AdminAuth): Prisma.UserWhereInput {
-  if (auth.role === 'platform_admin') {
-    return {};
-  }
+function getUserScopeWhere(access: AdminAccess): Prisma.UserWhereInput {
+  const organizationId = requireActiveOrganization(access);
 
   return {
-    tenantId: auth.tenantId,
+    tenantId: access.tenantId,
     role: {
       not: 'platform_admin'
     },
     memberships: {
       some: {
-        organizationId: {
-          in: auth.organizationIds
-        }
+        organizationId
       }
     }
   };
 }
 
-function getOrganizationScopeWhere(auth: AdminAuth): Prisma.OrganizationWhereInput {
-  if (auth.role === 'platform_admin') {
-    return {};
-  }
-
+function getOrganizationScopeWhere(access: AdminAccess): Prisma.OrganizationWhereInput {
   return {
-    tenantId: auth.tenantId,
-    id: {
-      in: auth.organizationIds
-    }
+    tenantId: access.tenantId,
+    ...getOrgWhere(access, {
+      organizationField: 'id'
+    })
   };
 }
 
-function getConsumerScopeWhere(auth: AdminAuth): Prisma.ConsumerWhereInput {
-  if (auth.role === 'platform_admin') {
-    return {};
-  }
-
+function getConsumerScopeWhere(access: AdminAccess): Prisma.ConsumerWhereInput {
   return {
-    tenantId: auth.tenantId,
-    organizationId: {
-      in: auth.organizationIds
-    }
+    tenantId: access.tenantId,
+    ...getOrgWhere(access)
   };
 }
 
-function getReviewScopeWhere(auth: AdminAuth): Prisma.CheckInReviewWhereInput {
-  if (auth.role === 'platform_admin') {
-    return {};
-  }
-
+function getReviewScopeWhere(access: AdminAccess): Prisma.CheckInReviewWhereInput {
   return {
-    tenantId: auth.tenantId,
-    organizationId: {
-      in: auth.organizationIds
-    }
+    tenantId: access.tenantId,
+    ...getOrgWhere(access)
   };
 }
 
-function getClinicalNoteScopeWhere(auth: AdminAuth): Prisma.ClinicalNoteWhereInput {
-  if (auth.role === 'platform_admin') {
-    return {};
-  }
-
+function getClinicalNoteScopeWhere(access: AdminAccess): Prisma.ClinicalNoteWhereInput {
   return {
-    tenantId: auth.tenantId,
-    organizationId: {
-      in: auth.organizationIds
-    }
+    tenantId: access.tenantId,
+    ...getOrgWhere(access)
   };
 }
 
-function getDailyCheckInScopeWhere(auth: AdminAuth): Prisma.DailyCheckInWhereInput {
-  if (auth.role === 'platform_admin') {
-    return {};
-  }
-
+function getDailyCheckInScopeWhere(access: AdminAccess): Prisma.DailyCheckInWhereInput {
   return {
     consumer: {
-      tenantId: auth.tenantId,
-      organizationId: {
-        in: auth.organizationIds
-      }
+      tenantId: access.tenantId,
+      ...getOrgWhere(access)
     }
   };
 }
 
-function getJournalScopeWhere(auth: AdminAuth): Prisma.JournalEntryWhereInput {
-  if (auth.role === 'platform_admin') {
-    return {};
-  }
-
+function getJournalScopeWhere(access: AdminAccess): Prisma.JournalEntryWhereInput {
   return {
     consumer: {
-      tenantId: auth.tenantId,
-      organizationId: {
-        in: auth.organizationIds
-      }
+      tenantId: access.tenantId,
+      ...getOrgWhere(access)
     }
   };
 }
 
-function getAppointmentScopeWhere(auth: AdminAuth): Prisma.AppointmentWhereInput {
-  if (auth.role === 'platform_admin') {
-    return {};
-  }
-
+function getAppointmentScopeWhere(access: AdminAccess): Prisma.AppointmentWhereInput {
   return {
-    organizationId: {
-      in: auth.organizationIds
-    }
+    ...getOrgWhere(access)
   };
 }
 
-function getRoutineCompletionScopeWhere(auth: AdminAuth): Prisma.RoutineCompletionWhereInput {
-  if (auth.role === 'platform_admin') {
-    return {};
-  }
-
+function getRoutineCompletionScopeWhere(access: AdminAccess): Prisma.RoutineCompletionWhereInput {
   return {
     routine: {
       consumer: {
-        tenantId: auth.tenantId,
-        organizationId: {
-          in: auth.organizationIds
-        }
+        tenantId: access.tenantId,
+        ...getOrgWhere(access)
       }
     }
   };
@@ -198,17 +143,11 @@ function normalizeOptionalString(value?: string | null) {
 }
 
 async function requireAdminContext(app: FastifyInstance, request: FastifyRequest) {
-  await app.verifyTenantRole(request, adminAccessRoles);
-
-  const auth = request.auth;
-  if (!auth) {
-    const error = new Error('Authentication required.') as Error & { statusCode?: number };
-    error.statusCode = 401;
-    throw error;
-  }
+  await app.authenticateRequest(request);
+  const access = requireRequestAccess(request);
 
   const currentUser = await prisma.user.findUnique({
-    where: { id: auth.userId },
+    where: { id: access.userId },
     include: {
       memberships: {
         include: {
@@ -226,18 +165,17 @@ async function requireAdminContext(app: FastifyInstance, request: FastifyRequest
   }
 
   return {
-    auth,
+    access,
     currentUser,
-    isPlatformAdmin: auth.role === 'platform_admin',
-    organizationScope: getAdminOrganizationScope(auth)
+    isPlatformAdmin: hasPlatformRole(access, 'platform_admin')
   };
 }
 
-async function loadScopedUserForManagement(auth: AdminAuth, userId: string) {
+async function loadScopedUserForManagement(access: AdminAccess, userId: string) {
   return prisma.user.findFirst({
     where: {
       id: userId,
-      ...getUserScopeWhere(auth)
+      ...getUserScopeWhere(access)
     },
     include: {
       tenant: true,
@@ -252,8 +190,20 @@ async function loadScopedUserForManagement(auth: AdminAuth, userId: string) {
   });
 }
 
-function ensureRoleManagementAllowed(actorRole: Role, currentRole: Role, nextRole: Role) {
-  if (!canAssignRole(actorRole, currentRole) || !canAssignRole(actorRole, nextRole)) {
+function canManageRole(access: AdminAccess, targetRole: Role) {
+  if (hasPlatformRole(access, 'platform_admin')) {
+    return supportedBetaRoles.includes(targetRole as (typeof supportedBetaRoles)[number]);
+  }
+
+  if (access.permissions.includes(permissions.orgUsersManage)) {
+    return ['org_admin', 'clinical_staff', 'billing', 'consumer'].includes(targetRole);
+  }
+
+  return false;
+}
+
+function ensureRoleManagementAllowed(access: AdminAccess, currentRole: Role, nextRole: Role) {
+  if (!canManageRole(access, currentRole) || !canManageRole(access, nextRole)) {
     const error = new Error('Your role cannot manage that account type.') as Error & { statusCode?: number };
     error.statusCode = 403;
     throw error;
@@ -269,8 +219,7 @@ function ensureRoleManagementAllowed(actorRole: Role, currentRole: Role, nextRol
 }
 
 async function resolveTargetOrganization(args: {
-  auth: AdminAuth;
-  actorRole: Role;
+  access: AdminAccess;
   requestedOrganizationId?: string | null;
   tenantId: string;
 }) {
@@ -288,13 +237,13 @@ async function resolveTargetOrganization(args: {
     throw error;
   }
 
-  if (args.actorRole !== 'platform_admin' && !args.auth.organizationIds.includes(organization.id)) {
+  if (!hasPlatformRole(args.access, 'platform_admin') && organization.id !== requireActiveOrganization(args.access)) {
     const error = new Error('Org admins can only manage users inside their assigned organization.') as Error & { statusCode?: number };
     error.statusCode = 403;
     throw error;
   }
 
-  if (args.actorRole !== 'platform_admin' && organization.tenantId !== args.tenantId) {
+  if (!hasPlatformRole(args.access, 'platform_admin') && organization.tenantId !== args.tenantId) {
     const error = new Error('Org admins can only manage users in their own tenant.') as Error & { statusCode?: number };
     error.statusCode = 403;
     throw error;
@@ -339,7 +288,9 @@ export async function adminRoutes(app: FastifyInstance) {
   const resetSystemService = new ResetSystemService(app.log);
 
   app.get('/v1/admin/dashboard', async (request) => {
-    const { auth, currentUser, isPlatformAdmin, organizationScope } = await requireAdminContext(app, request);
+    const { access, currentUser, isPlatformAdmin } = await requireAdminContext(app, request);
+    requireRoutePermission(request, permissions.orgUsersRead);
+    const activeOrganizationId = requireActiveOrganization(access);
 
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
@@ -366,10 +317,10 @@ export async function adminRoutes(app: FastifyInstance) {
       routineCompletions7d
     ] = await prisma.$transaction([
       prisma.tenant.findUnique({
-        where: { id: auth.tenantId }
+        where: { id: access.tenantId }
       }),
       prisma.organization.findMany({
-        where: getOrganizationScopeWhere(auth),
+        where: getOrganizationScopeWhere(access),
         orderBy: [
           { tenantId: 'asc' },
           { createdAt: 'asc' }
@@ -400,7 +351,7 @@ export async function adminRoutes(app: FastifyInstance) {
         }
       }),
       prisma.user.findMany({
-        where: getUserScopeWhere(auth),
+        where: getUserScopeWhere(access),
         orderBy: [
           { tenantId: 'asc' },
           { createdAt: 'desc' }
@@ -426,28 +377,26 @@ export async function adminRoutes(app: FastifyInstance) {
             }
           })
         : prisma.tenant.findMany({
-            where: { id: auth.tenantId },
+            where: { id: access.tenantId },
             orderBy: { createdAt: 'asc' },
             include: {
               organizations: {
                 where: {
-                  id: {
-                    in: organizationScope
-                  }
+                  id: activeOrganizationId
                 },
                 orderBy: { createdAt: 'asc' }
               }
             }
           }),
       prisma.consumer.findMany({
-        where: getConsumerScopeWhere(auth),
+        where: getConsumerScopeWhere(access),
         include: {
           organization: true
         },
         orderBy: { createdAt: 'desc' }
       }),
       prisma.checkInReview.findMany({
-        where: getReviewScopeWhere(auth),
+        where: getReviewScopeWhere(access),
         orderBy: { updatedAt: 'desc' },
         take: 30,
         include: {
@@ -459,7 +408,7 @@ export async function adminRoutes(app: FastifyInstance) {
       }),
       prisma.clinicalNote.findMany({
         where: {
-          ...getClinicalNoteScopeWhere(auth),
+          ...getClinicalNoteScopeWhere(access),
           flaggedForFollowUp: true
         },
         orderBy: { createdAt: 'desc' },
@@ -472,7 +421,7 @@ export async function adminRoutes(app: FastifyInstance) {
       }),
       prisma.dailyCheckIn.findMany({
         where: {
-          ...getDailyCheckInScopeWhere(auth),
+          ...getDailyCheckInScopeWhere(access),
           createdAt: {
             gte: sevenDaysAgo
           }
@@ -494,7 +443,7 @@ export async function adminRoutes(app: FastifyInstance) {
       }),
       prisma.clinicalNote.findMany({
         where: {
-          ...getClinicalNoteScopeWhere(auth),
+          ...getClinicalNoteScopeWhere(access),
           createdAt: {
             gte: sevenDaysAgo
           }
@@ -511,7 +460,7 @@ export async function adminRoutes(app: FastifyInstance) {
         where: isPlatformAdmin
           ? {}
           : {
-              tenantId: auth.tenantId
+              tenantId: access.tenantId
             },
         orderBy: { createdAt: 'desc' },
         take: 20,
@@ -521,7 +470,7 @@ export async function adminRoutes(app: FastifyInstance) {
       }),
       prisma.dailyCheckIn.count({
         where: {
-          ...getDailyCheckInScopeWhere(auth),
+          ...getDailyCheckInScopeWhere(access),
           createdAt: {
             gte: sevenDaysAgo
           }
@@ -529,7 +478,7 @@ export async function adminRoutes(app: FastifyInstance) {
       }),
       prisma.dailyCheckIn.count({
         where: {
-          ...getDailyCheckInScopeWhere(auth),
+          ...getDailyCheckInScopeWhere(access),
           createdAt: {
             gte: sevenDaysAgo
           },
@@ -538,7 +487,7 @@ export async function adminRoutes(app: FastifyInstance) {
       }),
       prisma.appointment.count({
         where: {
-          ...getAppointmentScopeWhere(auth),
+          ...getAppointmentScopeWhere(access),
           startsAt: {
             gte: todayStart,
             lt: tomorrowStart
@@ -547,7 +496,7 @@ export async function adminRoutes(app: FastifyInstance) {
       }),
       prisma.journalEntry.count({
         where: {
-          ...getJournalScopeWhere(auth),
+          ...getJournalScopeWhere(access),
           sharedWithCareTeam: true,
           createdAt: {
             gte: sevenDaysAgo
@@ -556,13 +505,18 @@ export async function adminRoutes(app: FastifyInstance) {
       }),
       prisma.routineCompletion.count({
         where: {
-          ...getRoutineCompletionScopeWhere(auth),
+          ...getRoutineCompletionScopeWhere(access),
           completionDate: {
             gte: sevenDaysAgo
           }
         }
       })
     ]);
+
+    const primaryMembership =
+      currentUser.memberships.find((membership) => membership.id === access.activeMembershipId)
+      ?? currentUser.memberships.find((membership) => membership.organizationId === access.activeOrganizationId)
+      ?? null;
 
     if (!tenant) {
       const error = new Error('Beta dashboard data is incomplete.') as Error & { statusCode?: number };
@@ -663,11 +617,11 @@ export async function adminRoutes(app: FastifyInstance) {
         mustChangePassword: currentUser.mustChangePassword
       },
       scopeModel: isPlatformAdmin ? 'platform_wide' : 'organization_membership',
-      primaryOrganization: currentUser.memberships[0]?.organization
+      primaryOrganization: primaryMembership?.organization
         ? {
-            id: currentUser.memberships[0].organization.id,
-            name: currentUser.memberships[0].organization.name,
-            npi: currentUser.memberships[0].organization.npi
+            id: primaryMembership.organization.id,
+            name: primaryMembership.organization.name,
+            npi: primaryMembership.organization.npi
           }
         : null,
       counts: {
@@ -779,11 +733,13 @@ export async function adminRoutes(app: FastifyInstance) {
           name: organization.name
         }))
       })),
-      assignableRoles: supportedBetaRoles.filter((role) => canAssignRole(currentUser.role, role))
+      assignableRoles: supportedBetaRoles.filter((role) => canManageRole(access, role))
     };
   });
 
   app.post('/v1/admin/reset-system', async (request, reply) => {
+    await app.authenticateRequest(request);
+    requireRoutePermission(request, permissions.platformOrganizationsManage);
     const { currentUser, isPlatformAdmin } = await requireAdminContext(app, request);
     const payload = resetSystemSchema.parse(request.body);
 
@@ -804,11 +760,11 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post('/v1/admin/users', async (request, reply) => {
-    const { auth, currentUser } = await requireAdminContext(app, request);
+    const { access, currentUser } = await requireAdminContext(app, request);
+    requireRoutePermission(request, permissions.orgUsersManage);
     const payload = createUserSchema.parse(request.body);
-    const actorRole = auth.role as Role;
 
-    if (!canAssignRole(actorRole, payload.role)) {
+    if (!canManageRole(access, payload.role)) {
       return reply.code(403).send({ message: 'Your role cannot assign that account type.' });
     }
 
@@ -817,14 +773,14 @@ export async function adminRoutes(app: FastifyInstance) {
           where: { slug: payload.tenantSlug }
         })
       : await prisma.tenant.findUnique({
-          where: { id: auth.tenantId }
+          where: { id: access.tenantId }
         });
 
     if (!tenant) {
       return reply.code(404).send({ message: 'Tenant was not found.' });
     }
 
-    if (actorRole !== 'platform_admin' && tenant.id !== auth.tenantId) {
+    if (!hasPlatformRole(access, 'platform_admin') && tenant.id !== access.tenantId) {
       return reply.code(403).send({ message: 'Org admins can only create users in their own tenant.' });
     }
 
@@ -834,8 +790,7 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     const organization = await resolveTargetOrganization({
-      auth,
-      actorRole,
+      access,
       requestedOrganizationId: payload.organizationId ?? null,
       tenantId: tenant.id
     });
@@ -884,6 +839,7 @@ export async function adminRoutes(app: FastifyInstance) {
           tenantId: tenant.id,
           consumerId,
           email,
+          normalizedEmail: email,
           fullName: payload.fullName.trim(),
           role: payload.role,
           passwordHash: await hashPassword(payload.password),
@@ -892,7 +848,8 @@ export async function adminRoutes(app: FastifyInstance) {
             ? {
                 create: {
                   organizationId: organization.id,
-                  role: payload.role
+                  role: payload.role,
+                  organizationRole: payload.role === 'platform_admin' ? null : payload.role
                 }
               }
             : undefined
@@ -957,10 +914,11 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.patch('/v1/admin/users/:userId', async (request, reply) => {
-    const { auth, currentUser } = await requireAdminContext(app, request);
+    const { access, currentUser } = await requireAdminContext(app, request);
+    requireRoutePermission(request, permissions.orgUsersManage);
     const params = z.object({ userId: z.string().min(1) }).parse(request.params);
     const payload = updateUserSchema.parse(request.body);
-    const targetUser = await loadScopedUserForManagement(auth, params.userId);
+    const targetUser = await loadScopedUserForManagement(access, params.userId);
 
     if (!targetUser) {
       return reply.code(404).send({ message: 'User was not found in your admin scope.' });
@@ -971,11 +929,14 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     const nextRole = payload.role ?? targetUser.role;
-    ensureRoleManagementAllowed(auth.role as Role, targetUser.role, nextRole);
+    ensureRoleManagementAllowed(access, targetUser.role, nextRole);
 
     const tenantId = targetUser.tenantId;
+    const targetUserActiveMembership =
+      targetUser.memberships.find((membership) => membership.organizationId === access.activeOrganizationId)
+      ?? null;
     const requestedOrganizationId =
-      payload.organizationId === undefined ? targetUser.memberships[0]?.organizationId ?? null : payload.organizationId;
+      payload.organizationId === undefined ? targetUserActiveMembership?.organizationId ?? null : payload.organizationId;
 
     const requiresOrganization = nextRole !== 'platform_admin';
     if (requiresOrganization && !requestedOrganizationId) {
@@ -983,8 +944,7 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     const organization = await resolveTargetOrganization({
-      auth,
-      actorRole: auth.role as Role,
+      access,
       requestedOrganizationId,
       tenantId
     });
@@ -1035,6 +995,7 @@ export async function adminRoutes(app: FastifyInstance) {
         where: { id: targetUser.id },
         data: {
           email: nextEmail,
+          normalizedEmail: nextEmail,
           fullName,
           role: nextRole,
           isActive: payload.isActive ?? targetUser.isActive,
@@ -1043,7 +1004,8 @@ export async function adminRoutes(app: FastifyInstance) {
             ? {
                 create: {
                   organizationId: organization.id,
-                  role: nextRole
+                  role: nextRole,
+                  organizationRole: nextRole === 'platform_admin' || nextRole === 'support' ? null : nextRole
                 }
               }
             : undefined
@@ -1110,16 +1072,17 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post('/v1/admin/users/:userId/set-temporary-password', async (request, reply) => {
-    const { auth, currentUser } = await requireAdminContext(app, request);
+    const { access, currentUser } = await requireAdminContext(app, request);
+    requireRoutePermission(request, permissions.orgUsersManage);
     const params = z.object({ userId: z.string().min(1) }).parse(request.params);
     const payload = temporaryPasswordSchema.parse(request.body);
-    const targetUser = await loadScopedUserForManagement(auth, params.userId);
+    const targetUser = await loadScopedUserForManagement(access, params.userId);
 
     if (!targetUser) {
       return reply.code(404).send({ message: 'User was not found in your admin scope.' });
     }
 
-    ensureRoleManagementAllowed(auth.role as Role, targetUser.role, targetUser.role);
+    ensureRoleManagementAllowed(access, targetUser.role, targetUser.role);
 
     await prisma.$transaction([
       prisma.user.update({
@@ -1151,14 +1114,15 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.patch('/v1/admin/organizations/:organizationId', async (request, reply) => {
-    const { auth, currentUser } = await requireAdminContext(app, request);
+    const { access, currentUser } = await requireAdminContext(app, request);
+    requireRoutePermission(request, permissions.orgSettingsManage);
     const params = z.object({ organizationId: z.string().min(1) }).parse(request.params);
     const payload = updateOrganizationSchema.parse(request.body);
 
     const organization = await prisma.organization.findFirst({
       where: {
         id: params.organizationId,
-        ...getOrganizationScopeWhere(auth)
+        ...getOrganizationScopeWhere(access)
       }
     });
 
