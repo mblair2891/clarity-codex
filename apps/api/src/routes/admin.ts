@@ -1,9 +1,11 @@
 import type { Prisma, Role } from '@prisma/client';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { env } from '../config/env.js';
 import { prisma } from '../lib/db.js';
 import { hashPassword } from '../lib/password.js';
 import { adminAccessRoles, canAssignRole, isClinicalRole, supportedBetaRoles } from '../lib/roles.js';
+import { ResetSystemService } from '../services/reset-system.service.js';
 
 const createUserSchema = z.object({
   tenantSlug: z.string().min(1).optional(),
@@ -33,6 +35,10 @@ const updateOrganizationSchema = z.object({
   name: z.string().min(2).max(120).optional(),
   npi: z.string().max(20).nullable().optional(),
   taxId: z.string().max(20).nullable().optional()
+});
+
+const resetSystemSchema = z.object({
+  confirmationText: z.string().trim().min(1)
 });
 
 type AdminAuth = NonNullable<FastifyRequest['auth']>;
@@ -330,6 +336,8 @@ function buildStatusCounts(users: Array<{ isActive: boolean; mustChangePassword:
 }
 
 export async function adminRoutes(app: FastifyInstance) {
+  const resetSystemService = new ResetSystemService(app.log);
+
   app.get('/v1/admin/dashboard', async (request) => {
     const { auth, currentUser, isPlatformAdmin, organizationScope } = await requireAdminContext(app, request);
 
@@ -687,8 +695,19 @@ export async function adminRoutes(app: FastifyInstance) {
       quickActions: [
         { id: 'create-user', label: 'Create beta account', description: 'Provision a staff, admin, or consumer login.' },
         { id: 'review-follow-ups', label: 'Review flagged follow-ups', description: 'Jump into the current attention queue.' },
-        { id: 'manage-orgs', label: 'Update organization details', description: 'Keep org names and identifiers current.' }
+        { id: 'manage-orgs', label: 'Update organization details', description: 'Keep org names and identifiers current.' },
+        ...(isPlatformAdmin && ResetSystemService.isEnabled()
+          ? [
+              {
+                id: 'reset-system',
+                label: 'Reset beta data',
+                description: 'Wipe seeded and business data while preserving your platform admin access.'
+              }
+            ]
+          : [])
       ],
+      resetSystemEnabled: isPlatformAdmin && ResetSystemService.isEnabled(),
+      resetSystemEnvironment: env.APP_ENV,
       organizations: organizations.map((organization) => {
         const scopedUsers = users.filter((user) => user.memberships.some((membership) => membership.organizationId === organization.id));
 
@@ -762,6 +781,26 @@ export async function adminRoutes(app: FastifyInstance) {
       })),
       assignableRoles: supportedBetaRoles.filter((role) => canAssignRole(currentUser.role, role))
     };
+  });
+
+  app.post('/v1/admin/reset-system', async (request, reply) => {
+    const { currentUser, isPlatformAdmin } = await requireAdminContext(app, request);
+    const payload = resetSystemSchema.parse(request.body);
+
+    if (!isPlatformAdmin) {
+      return reply.code(403).send({ message: 'Only a platform admin can reset the beta system.' });
+    }
+
+    if (!ResetSystemService.isEnabled()) {
+      return reply.code(403).send({ message: 'System reset is only enabled in the beta environment.' });
+    }
+
+    if (payload.confirmationText !== 'RESET') {
+      return reply.code(400).send({ message: 'Type RESET exactly to confirm the beta reset.' });
+    }
+
+    const result = await resetSystemService.resetSystem(currentUser.id);
+    return reply.send(result);
   });
 
   app.post('/v1/admin/users', async (request, reply) => {

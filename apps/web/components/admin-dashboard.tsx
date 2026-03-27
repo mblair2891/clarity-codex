@@ -12,7 +12,9 @@ import {
   getApiBaseUrlState,
   getDisplayRoleForShell,
   getStoredToken,
-  type AuthMeResponse
+  resetSystemData,
+  type AuthMeResponse,
+  type ResetSystemResponse
 } from '../lib/beta-auth';
 
 type AdminDashboardResponse = {
@@ -65,6 +67,8 @@ type AdminDashboardResponse = {
     label: string;
     description: string;
   }>;
+  resetSystemEnabled: boolean;
+  resetSystemEnvironment: string;
   organizations: Array<{
     id: string;
     name: string;
@@ -287,6 +291,12 @@ function buildOrganizationFormState(organization: AdminDashboardResponse['organi
   };
 }
 
+function buildResetSuccessMessage(result: ResetSystemResponse) {
+  const deletedRecords = Object.values(result.deleted).reduce((total, value) => total + value, 0);
+
+  return `Beta reset complete. Preserved ${result.preserved.user.email} in ${result.preserved.tenant.name} and removed ${deletedRecords} records.`;
+}
+
 export function AdminDashboard() {
   const router = useRouter();
   const { apiBaseUrl, error: apiBaseUrlError } = getApiBaseUrlState();
@@ -317,6 +327,13 @@ export function AdminDashboard() {
   const [organizationActionError, setOrganizationActionError] = useState<string | null>(null);
   const [organizationActionSuccess, setOrganizationActionSuccess] = useState<string | null>(null);
   const [isSavingOrganization, setIsSavingOrganization] = useState(false);
+
+  const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
+  const [resetConfirmationText, setResetConfirmationText] = useState('');
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null);
+  const [lastResetResult, setLastResetResult] = useState<ResetSystemResponse | null>(null);
+  const [isResettingSystem, setIsResettingSystem] = useState(false);
 
   async function loadDashboard(token: string, session?: AuthMeResponse) {
     if (!apiBaseUrl) {
@@ -625,6 +642,38 @@ export function AdminDashboard() {
     }
   }
 
+  async function handleResetSystem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!apiBaseUrl || !dashboard?.resetSystemEnabled) {
+      setResetError('Reset System is not available in this environment.');
+      return;
+    }
+
+    const token = getStoredToken();
+    if (!token) {
+      router.replace('/login');
+      return;
+    }
+
+    setIsResettingSystem(true);
+    setResetError(null);
+    setResetSuccess(null);
+
+    try {
+      const result = await resetSystemData(apiBaseUrl, token, resetConfirmationText.trim());
+      setLastResetResult(result);
+      setResetSuccess(buildResetSuccessMessage(result));
+      setResetConfirmationText('');
+      setIsResetDialogOpen(false);
+      await refreshDashboard();
+    } catch (actionError) {
+      setResetError(handleApiError(actionError, 'Unable to reset the beta environment.'));
+    } finally {
+      setIsResettingSystem(false);
+    }
+  }
+
   return (
     <RoleShell role={getDisplayRoleForShell(me?.user.role ?? 'org_admin')} title="Administration">
       <div className="adminStack">
@@ -665,6 +714,14 @@ export function AdminDashboard() {
                 onClick={() => {
                   if (action.id === 'create-user') {
                     document.getElementById('users')?.scrollIntoView({ behavior: 'smooth' });
+                    return;
+                  }
+
+                  if (action.id === 'reset-system') {
+                    setResetError(null);
+                    setResetSuccess(null);
+                    setResetConfirmationText('');
+                    setIsResetDialogOpen(true);
                     return;
                   }
 
@@ -825,6 +882,73 @@ export function AdminDashboard() {
             </div>
           </article>
         </section>
+
+        {me?.user.role === 'platform_admin' && dashboard?.resetSystemEnabled ? (
+          <section className="adminPanelGrid">
+            <article className="card">
+              <div className="sectionHeaderRow">
+                <div>
+                  <h2 className="sectionTitle">Reset beta system</h2>
+                  <p className="muted">
+                    Beta-only destructive action. This removes organizations, users, consumers, clinical data, RCM data, prompts, AI runs, and other seeded or business records while preserving your current platform admin login.
+                  </p>
+                </div>
+                <span className="statusPill warning">Environment: {dashboard.resetSystemEnvironment}</span>
+              </div>
+              <div className="listItemCard" style={{ marginTop: 16 }}>
+                <strong>What stays</strong>
+                <span className="muted">{me.user.email} and the minimum tenant/login records needed to keep admin access working.</span>
+              </div>
+              <div className="listItemCard" style={{ marginTop: 12 }}>
+                <strong>What gets wiped</strong>
+                <span className="muted">Organizations, memberships, non-admin users, consumers, appointments, notes, check-ins, tasks, billing data, AI history, and other non-essential beta records.</span>
+              </div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 20 }}>
+                <button
+                  type="button"
+                  className="primaryButton"
+                  onClick={() => {
+                    setResetError(null);
+                    setResetSuccess(null);
+                    setResetConfirmationText('');
+                    setIsResetDialogOpen(true);
+                  }}
+                >
+                  Reset System
+                </button>
+                <span className="muted" style={{ alignSelf: 'center' }}>
+                  Requires typing <strong>RESET</strong> before the request is sent.
+                </span>
+              </div>
+              {resetSuccess ? <div className="banner bannerSuccess" style={{ marginBottom: 0, marginTop: 16 }}>{resetSuccess}</div> : null}
+              {resetError ? <div className="banner bannerError" style={{ marginBottom: 0, marginTop: 16 }}>{resetError}</div> : null}
+              {lastResetResult ? (
+                <div className="adminSectionGrid" style={{ marginTop: 16 }}>
+                  <div className="listItemCard">
+                    <strong>Remaining users</strong>
+                    <span className="metric" style={{ fontSize: 24 }}>{lastResetResult.remaining.users}</span>
+                    <span className="muted">{lastResetResult.remaining.organizations} organizations remain</span>
+                  </div>
+                  <div className="listItemCard">
+                    <strong>Remaining consumers</strong>
+                    <span className="metric" style={{ fontSize: 24 }}>{lastResetResult.remaining.consumers}</span>
+                    <span className="muted">{lastResetResult.remaining.appointments} appointments remain</span>
+                  </div>
+                  <div className="listItemCard">
+                    <strong>Remaining billing items</strong>
+                    <span className="metric" style={{ fontSize: 24 }}>{lastResetResult.remaining.billingWorkItems}</span>
+                    <span className="muted">{lastResetResult.remaining.claims} claims remain</span>
+                  </div>
+                  <div className="listItemCard">
+                    <strong>Preserved tenant</strong>
+                    <span className="metric" style={{ fontSize: 24 }}>{lastResetResult.preserved.tenant.slug}</span>
+                    <span className="muted">{lastResetResult.preserved.user.email}</span>
+                  </div>
+                </div>
+              ) : null}
+            </article>
+          </section>
+        ) : null}
 
         <section className="adminPanelGrid" id="users">
           <article className="card">
@@ -1186,6 +1310,63 @@ export function AdminDashboard() {
           <PasswordUpdateCard mustChangePassword={me?.user.mustChangePassword} />
         </section>
       </div>
+      {isResetDialogOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.55)',
+            display: 'grid',
+            placeItems: 'center',
+            padding: 24,
+            zIndex: 1000
+          }}
+        >
+          <div className="card" style={{ width: 'min(100%, 560px)', display: 'grid', gap: 16 }}>
+            <div>
+              <p className="eyebrow">Danger zone</p>
+              <h2 className="sectionTitle">Reset beta system</h2>
+              <p className="muted" style={{ marginTop: 8 }}>
+                This permanently removes seeded, demo, and business data across the beta workspace. Your current platform admin login will be preserved, but organizations, consumers, staff accounts, notes, appointments, and billing data will be deleted.
+              </p>
+            </div>
+            <form onSubmit={handleResetSystem} className="consumerStack" style={{ gap: 16 }}>
+              <label className="fieldLabel">
+                Type RESET to confirm
+                <input
+                  className="inputField"
+                  value={resetConfirmationText}
+                  onChange={(event) => setResetConfirmationText(event.target.value)}
+                  placeholder="RESET"
+                  autoFocus
+                />
+              </label>
+              {resetError ? <div className="banner bannerError" style={{ marginBottom: 0 }}>{resetError}</div> : null}
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="secondaryButton"
+                  onClick={() => {
+                    if (isResettingSystem) {
+                      return;
+                    }
+
+                    setIsResetDialogOpen(false);
+                    setResetConfirmationText('');
+                  }}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="primaryButton" disabled={isResettingSystem || resetConfirmationText.trim() !== 'RESET'}>
+                  {isResettingSystem ? 'Resetting beta system...' : 'Confirm reset'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </RoleShell>
   );
 }

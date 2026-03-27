@@ -43,6 +43,30 @@ export type LoginResponse = AuthMeResponse & {
   token: string;
 };
 
+export type ResetSystemResponse = {
+  reset: true;
+  environment: string;
+  preserved: {
+    tenant: {
+      id: string;
+      slug: string;
+      name: string;
+    };
+    user: {
+      id: string;
+      email: string;
+      fullName: string;
+      role: string;
+    };
+    records: {
+      tenants: number;
+      users: number;
+    };
+  };
+  deleted: Record<string, number>;
+  remaining: Record<string, number>;
+};
+
 export function getApiBaseUrlState() {
   const apiBaseUrl = resolveApiBaseUrl();
 
@@ -108,6 +132,19 @@ export async function loginWithBetaAccessCode(apiBaseUrl: string, email: string,
       email,
       accessCode,
       tenantSlug
+    })
+  });
+}
+
+export async function resetSystemData(apiBaseUrl: string, token: string, confirmationText: string) {
+  return apiFetch<ResetSystemResponse>(apiBaseUrl, '/v1/admin/reset-system', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      confirmationText
     })
   });
 }
