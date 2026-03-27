@@ -56,3 +56,5 @@ terraform -chdir="$TF_DIR" apply -auto-approve \
   -var-file="$TF_DIR/beta.tfvars.example" \
   -var="image_tag=$IMAGE_TAG" \
   "${TF_EXTRA_ARGS[@]}"
+
+"$ROOT_DIR/scripts/run-beta-api-task.sh" "npx prisma migrate deploy"

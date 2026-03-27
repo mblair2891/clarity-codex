@@ -61,10 +61,14 @@ jobs:
       - run: npm ci
 
       - name: Prepare scripts
-        run: chmod +x scripts/bootstrap-tf-backend.sh scripts/deploy-beta.sh
+        run: chmod +x scripts/bootstrap-tf-backend.sh scripts/deploy-beta.sh scripts/run-beta-api-task.sh
 
       - name: Bootstrap Terraform backend
-        run: echo "Skipping bootstrap for now"
+        run: |
+          eval "$(./scripts/bootstrap-tf-backend.sh | sed 's/^/export /')"
+          echo "TF_STATE_BUCKET=${TF_STATE_BUCKET}" >> "$GITHUB_ENV"
+          echo "TF_LOCK_TABLE=${TF_LOCK_TABLE}" >> "$GITHUB_ENV"
+          echo "AWS_REGION=${AWS_REGION}" >> "$GITHUB_ENV"
 
       - name: Terraform init
         run: |
@@ -108,6 +112,9 @@ jobs:
           terraform -chdir=infra/aws apply -auto-approve \
             -var-file=beta.tfvars.example \
             -var="image_tag=${IMAGE_TAG}"
+
+      - name: Run Prisma migrations in beta API task
+        run: ./scripts/run-beta-api-task.sh "npx prisma migrate deploy"
 
       - name: Smoke test beta
         run: |
