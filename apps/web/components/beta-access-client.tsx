@@ -18,7 +18,8 @@ type ValidationState = 'idle' | 'validating';
 export function BetaAccessClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { apiBaseUrl, error: apiBaseUrlError } = getApiBaseUrlState();
+  const [hasMounted, setHasMounted] = useState(false);
+  const [apiState, setApiState] = useState<ReturnType<typeof getApiBaseUrlState> | null>(null);
   const [emailInput, setEmailInput] = useState('beta-admin@claritybridgehealth.com');
   const [passwordInput, setPasswordInput] = useState('');
   const [accessCodeInput, setAccessCodeInput] = useState('');
@@ -26,8 +27,17 @@ export function BetaAccessClient() {
   const [status, setStatus] = useState<ValidationState>('idle');
   const [error, setError] = useState<string | null>(null);
 
+  const apiBaseUrl = apiState?.apiBaseUrl ?? null;
+  const apiBaseUrlError = apiState?.error ?? null;
+  const hasResolvedApiState = hasMounted && apiState !== null;
+
   useEffect(() => {
-    if (!apiBaseUrl) {
+    setHasMounted(true);
+    setApiState(getApiBaseUrlState());
+  }, []);
+
+  useEffect(() => {
+    if (!hasResolvedApiState || !apiBaseUrl) {
       return;
     }
 
@@ -43,10 +53,10 @@ export function BetaAccessClient() {
       .catch(() => {
         clearStoredToken();
       });
-  }, [apiBaseUrl, router]);
+  }, [apiBaseUrl, hasResolvedApiState, router]);
 
   useEffect(() => {
-    if (!apiBaseUrl) {
+    if (!hasResolvedApiState || !apiBaseUrl) {
       return;
     }
 
@@ -67,7 +77,7 @@ export function BetaAccessClient() {
         setError(validationError instanceof Error ? validationError.message : 'Unable to validate this emergency access token.');
         setStatus('idle');
       });
-  }, [apiBaseUrl, router, searchParams]);
+  }, [apiBaseUrl, hasResolvedApiState, router, searchParams]);
 
   async function handlePasswordLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -164,7 +174,7 @@ export function BetaAccessClient() {
           type="submit"
           className="card"
           style={{ cursor: 'pointer', fontWeight: 700 }}
-          disabled={status === 'validating' || !apiBaseUrl}
+          disabled={!hasResolvedApiState || status === 'validating' || !apiBaseUrl}
         >
           {status === 'validating' ? 'Signing in...' : 'Continue to beta'}
         </button>
@@ -198,14 +208,14 @@ export function BetaAccessClient() {
             type="submit"
             className="card"
             style={{ cursor: 'pointer', fontWeight: 700 }}
-            disabled={status === 'validating' || !apiBaseUrl}
+            disabled={!hasResolvedApiState || status === 'validating' || !apiBaseUrl}
           >
             Use emergency access
           </button>
         </form>
       </details>
 
-      {error || apiBaseUrlError ? <p style={{ color: '#b42318', margin: 0 }}>{error ?? apiBaseUrlError}</p> : null}
+      {hasResolvedApiState && (error || apiBaseUrlError) ? <p style={{ color: '#b42318', margin: 0 }}>{error ?? apiBaseUrlError}</p> : null}
     </section>
   );
 }

@@ -10,13 +10,9 @@ export function resolveApiBaseUrl() {
     return url.toString().replace(/\/$/, '');
   }
 
-  if (url.hostname.endsWith('.app.github.dev')) {
-    const parts = url.hostname.split('-');
-    if (parts.length > 1) {
-      parts[parts.length - 1] = '4000';
-      url.hostname = parts.join('-');
-      return url.toString().replace(/\/$/, '');
-    }
+  if (/-3000\.app\.github\.dev$/.test(url.hostname)) {
+    url.hostname = url.hostname.replace(/-3000\.app\.github\.dev$/, '-4000.app.github.dev');
+    return url.toString().replace(/\/$/, '');
   }
 
   if (url.hostname.startsWith('beta-app.')) {

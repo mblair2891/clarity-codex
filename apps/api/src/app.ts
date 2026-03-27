@@ -12,6 +12,19 @@ import { rcmRoutes } from './routes/rcm.js';
 import { aiRoutes } from './routes/ai.js';
 import { AuditService } from './services/audit.service.js';
 
+function isAllowedCorsOrigin(origin: string) {
+  if (corsOrigins.includes(origin)) {
+    return true;
+  }
+
+  try {
+    const url = new URL(origin);
+    return url.protocol === 'https:' && /\.app\.github\.dev$/.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function buildApp() {
   const app = Fastify({
     logger: {
@@ -22,7 +35,7 @@ export function buildApp() {
 
   app.register(cors, {
     origin(origin, callback) {
-      if (!origin || corsOrigins.includes(origin)) {
+      if (!origin || isAllowedCorsOrigin(origin)) {
         callback(null, true);
         return;
       }
