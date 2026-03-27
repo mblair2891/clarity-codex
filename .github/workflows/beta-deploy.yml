@@ -64,10 +64,7 @@ jobs:
         run: chmod +x scripts/bootstrap-tf-backend.sh scripts/deploy-beta.sh
 
       - name: Bootstrap Terraform backend
-        run: |
-          while IFS= read -r line; do
-            echo "$line" >> "$GITHUB_ENV"
-          done < <(./scripts/bootstrap-tf-backend.sh)
+        run: echo "Skipping bootstrap for now"
 
       - name: Terraform init
         run: |
