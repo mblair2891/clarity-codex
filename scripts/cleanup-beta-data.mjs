@@ -577,15 +577,34 @@ async function main() {
   const [
     remainingTenants,
     remainingUsers,
+    remainingMemberships,
     remainingOrganizations,
     remainingConsumers,
-    remainingAuditLogs,
+    remainingDailyCheckIns,
     remainingCheckInReviews,
+    remainingAuditLogs,
     remainingClinicalNotes,
-    remainingAppointments
+    remainingJournalEntries,
+    remainingGoals,
+    remainingRoutines,
+    remainingRoutineCompletions,
+    remainingRecoveryPlans,
+    remainingConsumerConditions,
+    remainingMedicationRecords,
+    remainingAppointments,
+    remainingBillingWorkItems,
+    remainingBillingNotes,
+    remainingBillingActivities,
+    remainingInvoices,
+    remainingLedgerEntries,
+    remainingPromptRegistry,
+    remainingAiRuns
   ] = await prisma.$transaction([
     prisma.tenant.count(),
     prisma.user.count({
+      where: {}
+    }),
+    prisma.membership.count({
       where: {}
     }),
     prisma.organization.count({
@@ -594,10 +613,25 @@ async function main() {
     prisma.consumer.count({
       where: {}
     }),
-    prisma.auditLog.count(),
+    prisma.dailyCheckIn.count(),
     prisma.checkInReview.count(),
+    prisma.auditLog.count(),
     prisma.clinicalNote.count(),
-    prisma.appointment.count()
+    prisma.journalEntry.count(),
+    prisma.goal.count(),
+    prisma.routine.count(),
+    prisma.routineCompletion.count(),
+    prisma.recoveryPlan.count(),
+    prisma.consumerCondition.count(),
+    prisma.medicationRecord.count(),
+    prisma.appointment.count(),
+    prisma.billingWorkItem.count(),
+    prisma.billingNote.count(),
+    prisma.billingWorkItemActivity.count(),
+    prisma.invoice.count(),
+    prisma.patientLedgerEntry.count(),
+    prisma.promptRegistry.count(),
+    prisma.aiRun.count()
   ]);
 
   console.log(
@@ -617,12 +651,28 @@ async function main() {
         remaining: {
           tenants: remainingTenants,
           users: remainingUsers,
+          memberships: remainingMemberships,
           organizations: remainingOrganizations,
           consumers: remainingConsumers,
-          auditLogs: remainingAuditLogs,
+          dailyCheckIns: remainingDailyCheckIns,
           checkInReviews: remainingCheckInReviews,
+          auditLogs: remainingAuditLogs,
           clinicalNotes: remainingClinicalNotes,
-          appointments: remainingAppointments
+          journalEntries: remainingJournalEntries,
+          goals: remainingGoals,
+          routines: remainingRoutines,
+          routineCompletions: remainingRoutineCompletions,
+          recoveryPlans: remainingRecoveryPlans,
+          consumerConditions: remainingConsumerConditions,
+          medicationRecords: remainingMedicationRecords,
+          appointments: remainingAppointments,
+          billingWorkItems: remainingBillingWorkItems,
+          billingNotes: remainingBillingNotes,
+          billingWorkItemActivities: remainingBillingActivities,
+          invoices: remainingInvoices,
+          ledgerEntries: remainingLedgerEntries,
+          promptRegistry: remainingPromptRegistry,
+          aiRuns: remainingAiRuns
         }
       },
       null,
