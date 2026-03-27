@@ -5,7 +5,6 @@ coverage
 .env
 .env.local
 pnpm-lock.yaml
-package-lock.json
 *.log
 .prisma
 *.tsbuildinfo
