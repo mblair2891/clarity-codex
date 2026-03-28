@@ -7,8 +7,12 @@ type RecordCountSummary = Record<string, number>;
 type ResetSystemCounts = {
   tenants: number;
   users: number;
+  userPlatformRoles: number;
+  userSessions: number;
   memberships: number;
+  membershipLocations: number;
   organizations: number;
+  locations: number;
   consumers: number;
   dailyCheckIns: number;
   checkInReviews: number;
@@ -42,6 +46,7 @@ type ResetSystemCounts = {
   promptRegistry: number;
   aiRuns: number;
   auditLogs: number;
+  supportAccessSessions: number;
 };
 
 export interface ResetSystemResult {
@@ -76,8 +81,12 @@ async function countRemainingRecords(): Promise<ResetSystemCounts> {
   const [
     tenants,
     users,
+    userPlatformRoles,
+    userSessions,
     memberships,
+    membershipLocations,
     organizations,
+    locations,
     consumers,
     dailyCheckIns,
     checkInReviews,
@@ -110,12 +119,17 @@ async function countRemainingRecords(): Promise<ResetSystemCounts> {
     ledgerEntries,
     promptRegistry,
     aiRuns,
-    auditLogs
+    auditLogs,
+    supportAccessSessions
   ] = await prisma.$transaction([
     prisma.tenant.count(),
     prisma.user.count(),
+    prisma.userPlatformRole.count(),
+    prisma.userSession.count(),
     prisma.membership.count(),
+    prisma.membershipLocation.count(),
     prisma.organization.count(),
+    prisma.location.count(),
     prisma.consumer.count(),
     prisma.dailyCheckIn.count(),
     prisma.checkInReview.count(),
@@ -148,14 +162,19 @@ async function countRemainingRecords(): Promise<ResetSystemCounts> {
     prisma.patientLedgerEntry.count(),
     prisma.promptRegistry.count(),
     prisma.aiRun.count(),
-    prisma.auditLog.count()
+    prisma.auditLog.count(),
+    prisma.supportAccessSession.count()
   ]);
 
   return {
     tenants,
     users,
+    userPlatformRoles,
+    userSessions,
     memberships,
+    membershipLocations,
     organizations,
+    locations,
     consumers,
     dailyCheckIns,
     checkInReviews,
@@ -188,7 +207,8 @@ async function countRemainingRecords(): Promise<ResetSystemCounts> {
     ledgerEntries,
     promptRegistry,
     aiRuns,
-    auditLogs
+    auditLogs,
+    supportAccessSessions
   };
 }
 
@@ -322,6 +342,27 @@ export class ResetSystemService {
           where: {
             tenantId: {
               in: tenantIds
+            }
+          }
+        })
+      ).count;
+
+      summary.supportAccessSessions = (
+        await transaction.supportAccessSession.deleteMany({
+          where: {
+            organizationId: {
+              in: (
+                await transaction.organization.findMany({
+                  where: {
+                    tenantId: {
+                      in: tenantIds
+                    }
+                  },
+                  select: {
+                    id: true
+                  }
+                })
+              ).map((organization) => organization.id)
             }
           }
         })
@@ -639,6 +680,33 @@ export class ResetSystemService {
         })
       ).count;
 
+      summary.membershipLocations = (
+        await transaction.membershipLocation.deleteMany({
+          where: {
+            OR: [
+              {
+                membership: {
+                  organization: {
+                    tenantId: {
+                      in: tenantIds
+                    }
+                  }
+                }
+              },
+              {
+                location: {
+                  organization: {
+                    tenantId: {
+                      in: tenantIds
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        })
+      ).count;
+
       summary.memberships = (
         await transaction.membership.deleteMany({
           where: {
@@ -662,6 +730,30 @@ export class ResetSystemService {
         })
       ).count;
 
+      summary.userSessions = (
+        await transaction.userSession.deleteMany({
+          where: {
+            user: {
+              tenantId: {
+                in: tenantIds
+              }
+            }
+          }
+        })
+      ).count;
+
+      summary.userPlatformRoles = (
+        await transaction.userPlatformRole.deleteMany({
+          where: {
+            user: {
+              tenantId: {
+                in: tenantIds
+              }
+            }
+          }
+        })
+      ).count;
+
       summary.users = (
         await transaction.user.deleteMany({
           where: {
@@ -670,6 +762,18 @@ export class ResetSystemService {
             },
             id: {
               not: preservedUser.id
+            }
+          }
+        })
+      ).count;
+
+      summary.locations = (
+        await transaction.location.deleteMany({
+          where: {
+            organization: {
+              tenantId: {
+                in: tenantIds
+              }
             }
           }
         })

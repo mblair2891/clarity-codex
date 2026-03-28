@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { assertOrganizationAccess, getOrgWhere, requireActiveOrganization } from '../lib/access/org-scope.js';
+import { permissions } from '../lib/access/permissions.js';
+import { requireRequestAccess, requireSelfPermission } from '../lib/access/route-permissions.js';
 import { prisma } from '../lib/db.js';
-import { consumerSelfAccessRoles } from '../lib/roles.js';
 import { RiskService } from '../services/risk.service.js';
 
 const checkInSchema = z.object({
@@ -110,16 +112,11 @@ function buildRecoveryStatusLabel(score: number, completedToday: boolean, wantsS
 }
 
 async function requireConsumerContext(app: FastifyInstance, request: FastifyRequest) {
-  await app.verifyTenantRole(request, consumerSelfAccessRoles);
+  await app.authenticateRequest(request);
+  const access = requireRequestAccess(request);
+  requireActiveOrganization(access, 'Select an active organization before using consumer tools.');
 
-  const auth = request.auth;
-  if (!auth) {
-    const error = new Error('Authentication required.') as Error & { statusCode?: number };
-    error.statusCode = 401;
-    throw error;
-  }
-
-  if (!auth.consumerId) {
+  if (!access.consumerId) {
     const error = new Error('Consumer account is not linked to a consumer record.') as Error & { statusCode?: number };
     error.statusCode = 403;
     throw error;
@@ -127,8 +124,9 @@ async function requireConsumerContext(app: FastifyInstance, request: FastifyRequ
 
   const consumer = await prisma.consumer.findFirst({
     where: {
-      id: auth.consumerId,
-      tenantId: auth.tenantId
+      id: access.consumerId,
+      tenantId: access.tenantId,
+      ...getOrgWhere(access)
     },
     include: {
       organization: {
@@ -146,8 +144,10 @@ async function requireConsumerContext(app: FastifyInstance, request: FastifyRequ
     throw error;
   }
 
+  assertOrganizationAccess(access, consumer.organizationId, 'Consumer account is outside the active organization.');
+
   return {
-    auth,
+    access,
     consumer
   };
 }
@@ -156,7 +156,7 @@ export async function consumerRoutes(app: FastifyInstance) {
   const riskService = new RiskService();
 
   app.get('/v1/consumer/dashboard', async (request) => {
-    const { auth, consumer } = await requireConsumerContext(app, request);
+    const { access, consumer } = await requireConsumerContext(app, request);
     const todayStart = startOfUtcDay();
     const tomorrowStart = endOfUtcDay();
     const weekStart = new Date(todayStart);
@@ -165,7 +165,7 @@ export async function consumerRoutes(app: FastifyInstance) {
     const [currentUser, recoveryPlan, recentCheckIns, recentJournalEntries, goals, routines, appointments, medications, conditions] =
       await prisma.$transaction([
         prisma.user.findUnique({
-          where: { id: auth.userId },
+          where: { id: access.userId },
           select: {
             fullName: true,
             email: true,
@@ -492,9 +492,11 @@ export async function consumerRoutes(app: FastifyInstance) {
   });
 
   app.post('/v1/consumer/check-ins', async (request, reply) => {
-    const { consumer } = await requireConsumerContext(app, request);
+    const { access, consumer } = await requireConsumerContext(app, request);
+    requireSelfPermission(request, permissions.consumerCheckInsWriteSelf);
     const payload = checkInSchema.parse(request.body);
     const checkInDate = startOfUtcDay();
+    const organizationId = assertOrganizationAccess(access, consumer.organizationId, 'Your account is outside the active organization.');
 
     const existingEntry = await prisma.dailyCheckIn.findUnique({
       where: {
@@ -513,6 +515,7 @@ export async function consumerRoutes(app: FastifyInstance) {
         }
       },
       update: {
+        organizationId,
         mood: payload.mood,
         cravings: payload.cravings,
         stressLevel: payload.stressLevel,
@@ -528,6 +531,7 @@ export async function consumerRoutes(app: FastifyInstance) {
       },
       create: {
         consumerId: consumer.id,
+        organizationId,
         checkInDate,
         mood: payload.mood,
         cravings: payload.cravings,
@@ -576,12 +580,15 @@ export async function consumerRoutes(app: FastifyInstance) {
   });
 
   app.post('/v1/consumer/journal', async (request, reply) => {
-    const { consumer } = await requireConsumerContext(app, request);
+    const { access, consumer } = await requireConsumerContext(app, request);
+    requireSelfPermission(request, permissions.consumerJournalWriteSelf);
     const payload = journalEntrySchema.parse(request.body);
+    const organizationId = assertOrganizationAccess(access, consumer.organizationId, 'Your account is outside the active organization.');
 
     const entry = await prisma.journalEntry.create({
       data: {
         consumerId: consumer.id,
+        organizationId,
         title: payload.title,
         content: payload.content,
         moodScore: payload.moodScore,
@@ -597,15 +604,18 @@ export async function consumerRoutes(app: FastifyInstance) {
   });
 
   app.post('/v1/consumer/routines/:routineId/completions', async (request) => {
-    const { consumer } = await requireConsumerContext(app, request);
+    const { access, consumer } = await requireConsumerContext(app, request);
+    requireSelfPermission(request, permissions.consumerRoutinesWriteSelf);
     const { routineId } = routineParamsSchema.parse(request.params);
     const { completed } = routineCompletionSchema.parse(request.body);
     const completionDate = startOfUtcDay();
+    const organizationId = assertOrganizationAccess(access, consumer.organizationId, 'Your account is outside the active organization.');
 
     const routine = await prisma.routine.findFirst({
       where: {
         id: routineId,
-        consumerId: consumer.id
+        consumerId: consumer.id,
+        organizationId
       },
       include: {
         completions: {
@@ -625,6 +635,8 @@ export async function consumerRoutes(app: FastifyInstance) {
       throw error;
     }
 
+    assertOrganizationAccess(access, routine.organizationId, 'Routine is outside the active organization.');
+
     if (completed) {
       await prisma.routineCompletion.upsert({
         where: {
@@ -636,6 +648,7 @@ export async function consumerRoutes(app: FastifyInstance) {
         update: {},
         create: {
           routineId: routine.id,
+          organizationId,
           completionDate
         }
       });
@@ -683,11 +696,12 @@ export async function consumerRoutes(app: FastifyInstance) {
   });
 
   app.get('/v1/consumer/profile', async (request) => {
-    const { auth, consumer } = await requireConsumerContext(app, request);
+    const { access, consumer } = await requireConsumerContext(app, request);
+    requireSelfPermission(request, permissions.consumerProfileReadSelf);
 
     const user = await prisma.user.findUnique({
       where: {
-        id: auth.userId
+        id: access.userId
       },
       select: {
         email: true,
@@ -713,8 +727,10 @@ export async function consumerRoutes(app: FastifyInstance) {
   });
 
   app.patch('/v1/consumer/profile', async (request) => {
-    const { consumer } = await requireConsumerContext(app, request);
+    const { access, consumer } = await requireConsumerContext(app, request);
+    requireSelfPermission(request, permissions.consumerProfileWriteSelf);
     const payload = profileUpdateSchema.parse(request.body);
+    assertOrganizationAccess(access, consumer.organizationId, 'Consumer profile is outside the active organization.');
 
     const updated = await prisma.consumer.update({
       where: {

@@ -2,17 +2,12 @@ import fastifyJwt from '@fastify/jwt';
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { env } from '../config/env.js';
-import { prisma } from '../lib/db.js';
+import { buildLocalAccessContext, resolveAccessContext } from '../lib/access/resolve-access-context.js';
+import type { AccessContext, SessionJwtPayload } from '../lib/access/types.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
-    auth?: {
-      tenantId: string;
-      role: string;
-      userId: string;
-      organizationIds: string[];
-      consumerId: string | null;
-    };
+    access?: AccessContext;
   }
 }
 
@@ -29,21 +24,19 @@ async function authPlugin(app: FastifyInstance) {
     }
   });
 
-  app.decorateRequest('auth', undefined);
+  app.decorateRequest('access', undefined);
 
   app.decorate(
-    'verifyTenantRole',
-    async (request: FastifyRequest, requiredRoles?: string[]) => {
+    'authenticateRequest',
+    async (request: FastifyRequest) => {
+      if (request.access) {
+        return;
+      }
+
       const authHeader = request.headers.authorization;
       if (!authHeader) {
         if (env.APP_ENV === 'local') {
-          request.auth = {
-            tenantId: 'tenant_demo',
-            role: 'platform_admin',
-            userId: 'demo_user',
-            organizationIds: [],
-            consumerId: null
-          };
+          request.access = buildLocalAccessContext();
           return;
         }
 
@@ -52,37 +45,8 @@ async function authPlugin(app: FastifyInstance) {
         throw error;
       }
 
-      const decoded = await request.jwtVerify<{ sub: string }>();
-      const user = await prisma.user.findUnique({
-        where: { id: decoded.sub },
-        include: {
-          memberships: {
-            select: {
-              organizationId: true
-            }
-          }
-        }
-      });
-
-      if (!user || !user.isActive) {
-        const error = new Error('Authenticated user is inactive or missing.') as Error & { statusCode?: number };
-        error.statusCode = 401;
-        throw error;
-      }
-
-      request.auth = {
-        tenantId: user.tenantId,
-        role: user.role,
-        userId: user.id,
-        organizationIds: user.memberships.map((membership) => membership.organizationId),
-        consumerId: user.consumerId ?? null
-      };
-
-      if (requiredRoles && !requiredRoles.includes(request.auth.role)) {
-        const error = new Error('Role does not have access to this resource.') as Error & { statusCode?: number };
-        error.statusCode = 403;
-        throw error;
-      }
+      const decoded = await request.jwtVerify<SessionJwtPayload>();
+      request.access = await resolveAccessContext(decoded);
     }
   );
 }
@@ -93,6 +57,6 @@ export const registerAuth = fp(authPlugin, {
 
 declare module 'fastify' {
   interface FastifyInstance {
-    verifyTenantRole: (request: FastifyRequest, requiredRoles?: string[]) => Promise<void>;
+    authenticateRequest: (request: FastifyRequest) => Promise<void>;
   }
 }

@@ -1,8 +1,11 @@
-import type { Role, User } from '@prisma/client';
+import type { PlatformRole, Role, User } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { env } from '../config/env.js';
 import { prisma } from '../lib/db.js';
+import { deriveLegacyPlatformRoles } from '../lib/access/types.js';
+import { permissions } from '../lib/access/permissions.js';
+import { requireRequestAccess, requireRoutePermission } from '../lib/access/route-permissions.js';
 import { getLandingPath } from '../lib/roles.js';
 import { hashPassword, verifyPassword } from '../lib/password.js';
 
@@ -23,26 +26,49 @@ const betaLoginSchema = z.object({
   tenantSlug: z.string().min(1).default('beta-demo')
 });
 
+const supportStartSchema = z.object({
+  organizationId: z.string().min(1),
+  locationId: z.string().min(1).optional(),
+  reason: z.string().min(3).max(500),
+  ticketReference: z.string().max(120).optional()
+});
+
+const sessionDurationMs = 8 * 60 * 60 * 1000;
+const supportSessionDurationMs = 2 * 60 * 60 * 1000;
+
 async function buildAuthPayload(app: FastifyInstance, user: User & {
   tenant: { id: string; slug: string; name: string };
   memberships: Array<{
+    id: string;
     organization: {
       id: string;
       name: string;
       npi: string | null;
     };
   }>;
+  platformRoles: Array<{
+    role: PlatformRole;
+  }>;
 }) {
-  const token = await app.jwt.sign(
-    {
-      tenantId: user.tenantId,
-      role: user.role
-    },
-    {
-      sub: user.id,
-      aud: env.JWT_AUDIENCE
+  const [singleMembership] = user.memberships;
+  const activeMembership = user.memberships.length === 1 ? singleMembership ?? null : null;
+  const platformRoles = user.platformRoles.length
+    ? user.platformRoles.map((platformRole) => platformRole.role)
+    : deriveLegacyPlatformRoles(user.role);
+  const session = await prisma.userSession.create({
+    data: {
+      userId: user.id,
+      activeOrganizationId: activeMembership?.organization.id ?? null,
+      activeMembershipId: activeMembership?.id ?? null,
+      supportMode: false,
+      expiresAt: new Date(Date.now() + sessionDurationMs)
     }
-  );
+  });
+  const token = await signSessionToken(app, {
+    user,
+    session,
+    platformRoles
+  });
 
   return {
     token,
@@ -60,14 +86,51 @@ async function buildAuthPayload(app: FastifyInstance, user: User & {
       slug: user.tenant.slug,
       name: user.tenant.name
     },
-    organization: user.memberships[0]?.organization
+    organization: activeMembership?.organization
       ? {
-          id: user.memberships[0].organization.id,
-          name: user.memberships[0].organization.name,
-          npi: user.memberships[0].organization.npi
+          id: activeMembership.organization.id,
+          name: activeMembership.organization.name,
+          npi: activeMembership.organization.npi
         }
       : null
   };
+}
+
+async function signSessionToken(
+  app: FastifyInstance,
+  args: {
+    user: Pick<User, 'id' | 'tenantId' | 'role'>;
+    session: {
+      id: string;
+      activeOrganizationId: string | null;
+      activeMembershipId: string | null;
+      activeLocationId: string | null;
+      supportMode: boolean;
+      supportAccessSessionId: string | null;
+    };
+    platformRoles: PlatformRole[];
+  }
+) {
+  const token = await app.jwt.sign(
+    {
+      type: args.session.supportMode ? 'SUPPORT' : 'USER',
+      tenantId: args.user.tenantId,
+      role: args.user.role,
+      sid: args.session.id,
+      platformRoles: args.platformRoles,
+      activeOrganizationId: args.session.activeOrganizationId,
+      activeMembershipId: args.session.activeMembershipId,
+      activeLocationId: args.session.activeLocationId,
+      supportMode: args.session.supportMode,
+      supportAccessSessionId: args.session.supportAccessSessionId
+    },
+    {
+      sub: args.user.id,
+      aud: env.JWT_AUDIENCE
+    }
+  );
+
+  return token;
 }
 
 async function loadUserForAuth(userId: string) {
@@ -75,12 +138,16 @@ async function loadUserForAuth(userId: string) {
     where: { id: userId },
     include: {
       tenant: true,
+      platformRoles: {
+        select: {
+          role: true
+        }
+      },
       memberships: {
         include: {
           organization: true
         },
-        orderBy: { id: 'asc' },
-        take: 1
+        orderBy: { id: 'asc' }
       }
     }
   });
@@ -91,19 +158,30 @@ async function loadUserByTenantAndEmail(tenantSlug: string, email: string) {
 
   return prisma.user.findFirst({
     where: {
-      email: normalizedEmail,
       tenant: {
         slug: tenantSlug
-      }
+      },
+      OR: [
+        {
+          normalizedEmail
+        },
+        {
+          email: normalizedEmail
+        }
+      ]
     },
     include: {
       tenant: true,
+      platformRoles: {
+        select: {
+          role: true
+        }
+      },
       memberships: {
         include: {
           organization: true
         },
-        orderBy: { id: 'asc' },
-        take: 1
+        orderBy: { id: 'asc' }
       }
     }
   });
@@ -163,18 +241,12 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post('/v1/auth/change-password', async (request) => {
-    await app.verifyTenantRole(request);
-
-    const auth = request.auth;
-    if (!auth) {
-      const error = new Error('Authentication required.') as Error & { statusCode?: number };
-      error.statusCode = 401;
-      throw error;
-    }
+    await app.authenticateRequest(request);
+    const access = requireRequestAccess(request);
 
     const { currentPassword, newPassword } = changePasswordSchema.parse(request.body);
     const user = await prisma.user.findUnique({
-      where: { id: auth.userId }
+      where: { id: access.userId }
     });
 
     if (!user || !user.passwordHash || !user.isActive) {
@@ -202,22 +274,21 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.get('/v1/auth/me', async (request) => {
-    await app.verifyTenantRole(request);
+    await app.authenticateRequest(request);
+    const access = requireRequestAccess(request);
 
-    const auth = request.auth;
-    if (!auth) {
-      const error = new Error('Authentication required.') as Error & { statusCode?: number };
-      error.statusCode = 401;
-      throw error;
-    }
-
-    const user = await loadUserForAuth(auth.userId);
+    const user = await loadUserForAuth(access.userId);
 
     if (!user || !user.isActive) {
       const error = new Error('Authenticated user was not found.') as Error & { statusCode?: number };
       error.statusCode = 401;
       throw error;
     }
+
+    const activeMembership =
+      user.memberships.find((membership) => membership.id === access.activeMembershipId)
+      ?? user.memberships.find((membership) => membership.organization.id === access.activeOrganizationId)
+      ?? null;
 
     return {
       landingPath: getLandingPath(user.role as Role),
@@ -234,13 +305,244 @@ export async function authRoutes(app: FastifyInstance) {
         slug: user.tenant.slug,
         name: user.tenant.name
       },
-      organization: user.memberships[0]?.organization
+      accessContext: {
+        type: access.type,
+        platformRoles: access.platformRoles,
+        activeOrganizationId: access.activeOrganizationId,
+        activeMembershipId: access.activeMembershipId,
+        activeLocationId: access.activeLocationId,
+        supportMode: access.supportMode,
+        permissions: access.permissions
+      },
+      organization: activeMembership?.organization
         ? {
-            id: user.memberships[0].organization.id,
-            name: user.memberships[0].organization.name,
-            npi: user.memberships[0].organization.npi
+            id: activeMembership.organization.id,
+            name: activeMembership.organization.name,
+            npi: activeMembership.organization.npi
           }
         : null
     };
+  });
+
+  app.post('/v1/platform/support/start', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requireRoutePermission(request, permissions.platformSupportAccess);
+    if (!access.sessionId) {
+      return reply.code(400).send({ message: 'A session-backed login is required to start support mode.' });
+    }
+
+    const payload = supportStartSchema.parse(request.body);
+    const [user, userSession, organization, location] = await Promise.all([
+      loadUserForAuth(access.userId),
+      prisma.userSession.findUnique({
+        where: { id: access.sessionId }
+      }),
+      prisma.organization.findUnique({
+        where: { id: payload.organizationId }
+      }),
+      payload.locationId
+        ? prisma.location.findUnique({
+            where: { id: payload.locationId }
+          })
+        : Promise.resolve(null)
+    ]);
+
+    if (!user || !user.isActive) {
+      return reply.code(401).send({ message: 'Authenticated user was not found.' });
+    }
+
+    if (!userSession || userSession.userId !== access.userId || userSession.revokedAt || userSession.expiresAt <= new Date()) {
+      return reply.code(401).send({ message: 'Authenticated session is invalid or expired.' });
+    }
+
+    if (!organization) {
+      return reply.code(404).send({ message: 'Organization was not found.' });
+    }
+
+    if (payload.locationId && (!location || location.organizationId !== organization.id)) {
+      return reply.code(404).send({ message: 'Location was not found in the requested organization.' });
+    }
+
+    const platformRoles = user.platformRoles.length
+      ? user.platformRoles.map((platformRole) => platformRole.role)
+      : deriveLegacyPlatformRoles(user.role);
+
+    const expiresAt = new Date(Math.min(userSession.expiresAt.getTime(), Date.now() + supportSessionDurationMs));
+    const supportAccessSession = await prisma.$transaction(async (transaction) => {
+      if (userSession.supportAccessSessionId) {
+        await transaction.supportAccessSession.updateMany({
+          where: {
+            id: userSession.supportAccessSessionId,
+            supportUserId: access.userId,
+            endedAt: null
+          },
+          data: {
+            endedAt: new Date()
+          }
+        });
+      }
+
+      const created = await transaction.supportAccessSession.create({
+        data: {
+          supportUserId: access.userId,
+          organizationId: organization.id,
+          locationId: location?.id ?? null,
+          reason: payload.reason.trim(),
+          ticketRef: payload.ticketReference?.trim() ?? null,
+          expiresAt
+        }
+      });
+
+      await transaction.userSession.update({
+        where: { id: userSession.id },
+        data: {
+          supportMode: true,
+          supportAccessSessionId: created.id,
+          activeOrganizationId: organization.id,
+          activeMembershipId: null,
+          activeLocationId: location?.id ?? null
+        }
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          tenantId: organization.tenantId,
+          userId: access.userId,
+          organizationId: organization.id,
+          sessionId: userSession.id,
+          supportAccessSessionId: created.id,
+          supportMode: true,
+          action: 'platform.support.started',
+          entityType: 'support_access_session',
+          entityId: created.id,
+          metadata: {
+            locationId: location?.id ?? null,
+            reason: payload.reason.trim(),
+            ticketReference: payload.ticketReference?.trim() ?? null,
+            expiresAt: created.expiresAt
+          }
+        }
+      });
+
+      return created;
+    });
+
+    const token = await signSessionToken(app, {
+      user,
+      session: {
+        id: userSession.id,
+        activeOrganizationId: organization.id,
+        activeMembershipId: null,
+        activeLocationId: location?.id ?? null,
+        supportMode: true,
+        supportAccessSessionId: supportAccessSession.id
+      },
+      platformRoles
+    });
+
+    return reply.send({
+      token,
+      supportSession: {
+        id: supportAccessSession.id,
+        organizationId: organization.id,
+        locationId: location?.id ?? null,
+        reason: supportAccessSession.reason,
+        ticketReference: supportAccessSession.ticketRef,
+        supportMode: true,
+        expiresAt: supportAccessSession.expiresAt
+      }
+    });
+  });
+
+  app.post('/v1/platform/support/end', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requireRoutePermission(request, permissions.platformSupportAccess);
+    if (!access.sessionId) {
+      return reply.code(400).send({ message: 'A session-backed login is required to end support mode.' });
+    }
+
+    const [user, userSession] = await Promise.all([
+      loadUserForAuth(access.userId),
+      prisma.userSession.findUnique({
+        where: { id: access.sessionId }
+      })
+    ]);
+
+    if (!user || !user.isActive) {
+      return reply.code(401).send({ message: 'Authenticated user was not found.' });
+    }
+
+    if (!userSession || userSession.userId !== access.userId || userSession.revokedAt || userSession.expiresAt <= new Date()) {
+      return reply.code(401).send({ message: 'Authenticated session is invalid or expired.' });
+    }
+
+    if (!userSession.supportMode || !userSession.supportAccessSessionId) {
+      return reply.code(400).send({ message: 'No active support session is attached to this login session.' });
+    }
+
+    const platformRoles = user.platformRoles.length
+      ? user.platformRoles.map((platformRole) => platformRole.role)
+      : deriveLegacyPlatformRoles(user.role);
+    const previousSupportAccessSessionId = userSession.supportAccessSessionId;
+    const previousOrganizationId = userSession.activeOrganizationId;
+
+    await prisma.$transaction(async (transaction) => {
+      await transaction.supportAccessSession.updateMany({
+        where: {
+          id: previousSupportAccessSessionId,
+          supportUserId: access.userId,
+          endedAt: null
+        },
+        data: {
+          endedAt: new Date()
+        }
+      });
+
+      await transaction.userSession.update({
+        where: { id: userSession.id },
+        data: {
+          supportMode: false,
+          supportAccessSessionId: null,
+          activeOrganizationId: null,
+          activeMembershipId: null,
+          activeLocationId: null
+        }
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          tenantId: access.tenantId,
+          userId: access.userId,
+          organizationId: previousOrganizationId,
+          sessionId: userSession.id,
+          supportAccessSessionId: previousSupportAccessSessionId,
+          supportMode: false,
+          action: 'platform.support.ended',
+          entityType: 'support_access_session',
+          entityId: previousSupportAccessSessionId,
+          metadata: {
+            previousOrganizationId
+          }
+        }
+      });
+    });
+
+    const token = await signSessionToken(app, {
+      user,
+      session: {
+        id: userSession.id,
+        activeOrganizationId: null,
+        activeMembershipId: null,
+        activeLocationId: null,
+        supportMode: false,
+        supportAccessSessionId: null
+      },
+      platformRoles
+    });
+
+    return reply.send({
+      token,
+      supportSessionEnded: true
+    });
   });
 }

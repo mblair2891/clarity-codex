@@ -18,6 +18,27 @@ enum Role {
   consumer
 }
 
+enum PlatformRole {
+  platform_admin
+  support
+}
+
+enum OrganizationRole {
+  org_admin
+  clinical_staff
+  clinician
+  case_manager
+  billing
+  consumer
+}
+
+enum MembershipStatus {
+  active
+  invited
+  suspended
+  revoked
+}
+
 enum ConditionStatus {
   active
   inactive
@@ -58,10 +79,10 @@ enum AiActionType {
 }
 
 model Tenant {
-  id               String               @id @default(cuid())
-  slug             String               @unique
+  id               String            @id @default(cuid())
+  slug             String            @unique
   name             String
-  createdAt        DateTime             @default(now())
+  createdAt        DateTime          @default(now())
   organizations    Organization[]
   users            User[]
   consumers        Consumer[]
@@ -76,65 +97,155 @@ model Tenant {
 }
 
 model Organization {
-  id               String               @id @default(cuid())
+  id               String            @id @default(cuid())
   tenantId         String
-  tenant           Tenant               @relation(fields: [tenantId], references: [id])
+  tenant           Tenant            @relation(fields: [tenantId], references: [id])
   name             String
   npi              String?
   taxId            String?
   memberships      Membership[]
+  locations        Location[]
   consumers        Consumer[]
   clinicalNotes    ClinicalNote[]
-  checkInReviews CheckInReview[]
+  checkInReviews   CheckInReview[]
   billingWorkItems BillingWorkItem[]
   billingNotes     BillingNote[]
-  appointments   Appointment[]
-  groups         GroupSession[]
-  encounters     Encounter[]
-  createdAt      DateTime             @default(now())
+  appointments     Appointment[]
+  groups           GroupSession[]
+  encounters       Encounter[]
+  createdAt        DateTime          @default(now())
 }
 
 model User {
-  id                    String            @id @default(cuid())
-  tenantId              String
-  tenant                Tenant            @relation(fields: [tenantId], references: [id])
-  consumerId            String?           @unique
-  consumer              Consumer?         @relation(fields: [consumerId], references: [id])
-  email                 String
-  fullName              String
-  role                  Role
-  passwordHash          String?
-  isActive              Boolean           @default(true)
-  mustChangePassword    Boolean           @default(false)
-  memberships           Membership[]
-  authoredClinicalNotes ClinicalNote[]
+  id                      String                    @id @default(cuid())
+  tenantId                String
+  tenant                  Tenant                    @relation(fields: [tenantId], references: [id])
+  consumerId              String?                   @unique
+  consumer                Consumer?                 @relation(fields: [consumerId], references: [id])
+  email                   String
+  normalizedEmail         String?
+  fullName                String
+  role                    Role
+  passwordHash            String?
+  isActive                Boolean                   @default(true)
+  mustChangePassword      Boolean                   @default(false)
+  memberships             Membership[]
+  platformRoles           UserPlatformRole[]
+  sessions                UserSession[]
+  authoredClinicalNotes   ClinicalNote[]
   completedCheckInReviews CheckInReview[]
-  createdBillingWorkItems BillingWorkItem[] @relation("BillingWorkItemCreatedBy")
-  updatedBillingWorkItems BillingWorkItem[] @relation("BillingWorkItemUpdatedBy")
-  authoredBillingNotes BillingNote[]      @relation("BillingNoteAuthor")
-  billingActivities   BillingWorkItemActivity[] @relation("BillingWorkItemActivityActor")
-  auditLogs           AuditLog[]
-  aiRuns              AiRun[]
-  createdAt           DateTime          @default(now())
+  createdBillingWorkItems BillingWorkItem[]         @relation("BillingWorkItemCreatedBy")
+  updatedBillingWorkItems BillingWorkItem[]         @relation("BillingWorkItemUpdatedBy")
+  authoredBillingNotes    BillingNote[]             @relation("BillingNoteAuthor")
+  billingActivities       BillingWorkItemActivity[] @relation("BillingWorkItemActivityActor")
+  auditLogs               AuditLog[]
+  aiRuns                  AiRun[]
+  createdAt               DateTime                  @default(now())
 
   @@unique([tenantId, email])
+  @@index([normalizedEmail])
 }
 
 model Membership {
-  id             String       @id @default(cuid())
-  userId         String
+  id                  String               @id @default(cuid())
+  userId              String
+  organizationId      String
+  role                Role
+  organizationRole    OrganizationRole?
+  status              MembershipStatus     @default(active)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  user                User                 @relation(fields: [userId], references: [id])
+  organization        Organization         @relation(fields: [organizationId], references: [id])
+  locationAssignments MembershipLocation[]
+
+  @@unique([userId, organizationId])
+}
+
+model UserPlatformRole {
+  id        String       @id @default(cuid())
+  userId    String
+  role      PlatformRole
+  user      User         @relation(fields: [userId], references: [id])
+  createdAt DateTime     @default(now())
+
+  @@unique([userId, role])
+  @@index([userId])
+}
+
+model UserSession {
+  id                     String    @id @default(cuid())
+  userId                 String
+  user                   User      @relation(fields: [userId], references: [id])
+  activeOrganizationId   String?
+  activeMembershipId     String?
+  activeLocationId       String?
+  supportAccessSessionId String?
+  supportMode            Boolean   @default(false)
+  expiresAt              DateTime
+  revokedAt              DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([activeOrganizationId])
+  @@index([activeMembershipId])
+  @@index([expiresAt])
+}
+
+model Location {
+  id                  String               @id @default(cuid())
+  organizationId      String
+  organization        Organization         @relation(fields: [organizationId], references: [id])
+  name                String
+  timezone            String?
+  isActive            Boolean              @default(true)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  membershipLocations MembershipLocation[]
+
+  @@index([organizationId])
+}
+
+model MembershipLocation {
+  id           String     @id @default(cuid())
+  membershipId String
+  locationId   String
+  isPrimary    Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+  membership   Membership @relation(fields: [membershipId], references: [id])
+  location     Location   @relation(fields: [locationId], references: [id])
+
+  @@unique([membershipId, locationId])
+  @@index([membershipId])
+  @@index([locationId])
+}
+
+model SupportAccessSession {
+  id             String    @id @default(cuid())
+  supportUserId  String
   organizationId String
-  role           Role
-  user           User         @relation(fields: [userId], references: [id])
-  organization   Organization @relation(fields: [organizationId], references: [id])
+  membershipId   String?
+  locationId     String?
+  reason         String?
+  ticketRef      String?
+  startedAt      DateTime  @default(now())
+  expiresAt      DateTime
+  endedAt        DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([supportUserId])
+  @@index([organizationId])
+  @@index([expiresAt])
 }
 
 model Consumer {
   id                  String               @id @default(cuid())
   tenantId            String
   tenant              Tenant               @relation(fields: [tenantId], references: [id])
-  organizationId      String?
-  organization        Organization?        @relation(fields: [organizationId], references: [id])
+  organizationId      String
+  organization        Organization         @relation(fields: [organizationId], references: [id])
   userAccount         User?
   firstName           String
   lastName            String
@@ -165,64 +276,66 @@ model Consumer {
 }
 
 model DailyCheckIn {
-  id                    String   @id @default(cuid())
-  consumerId            String
-  consumer              Consumer @relation(fields: [consumerId], references: [id])
-  review                CheckInReview?
-  checkInDate           DateTime
-  mood                  Int
-  cravings              Int
-  stressLevel           Int?
-  sleepHours            Float?
-  sleepQuality          Int?
-  motivationLevel       Int?
-  treatmentAdherence    Boolean?
-  wantsStaffFollowUp    Boolean  @default(false)
-  difficultMoments      String[]
-  copingToolsUsed       String[]
-  notes                 String?
-  gratitude             String?
-  createdAt             DateTime @default(now())
+  id                 String         @id @default(cuid())
+  organizationId     String
+  consumerId         String
+  consumer           Consumer       @relation(fields: [consumerId], references: [id])
+  review             CheckInReview?
+  checkInDate        DateTime
+  mood               Int
+  cravings           Int
+  stressLevel        Int?
+  sleepHours         Float?
+  sleepQuality       Int?
+  motivationLevel    Int?
+  treatmentAdherence Boolean?
+  wantsStaffFollowUp Boolean        @default(false)
+  difficultMoments   String[]
+  copingToolsUsed    String[]
+  notes              String?
+  gratitude          String?
+  createdAt          DateTime       @default(now())
 
   @@unique([consumerId, checkInDate])
 }
 
 model CheckInReview {
-  id                 String       @id @default(cuid())
-  checkInId          String       @unique
-  checkIn            DailyCheckIn @relation(fields: [checkInId], references: [id])
-  tenantId           String
-  tenant             Tenant       @relation(fields: [tenantId], references: [id])
-  organizationId     String
-  organization       Organization @relation(fields: [organizationId], references: [id])
-  consumerId         String
-  consumer           Consumer     @relation(fields: [consumerId], references: [id])
-  reviewerUserId     String?
-  reviewer           User?        @relation(fields: [reviewerUserId], references: [id])
-  status             String       @default("pending")
-  followUpStatus     String       @default("not_needed")
-  reviewNote         String?
-  reviewedAt         DateTime?
+  id                  String       @id @default(cuid())
+  checkInId           String       @unique
+  checkIn             DailyCheckIn @relation(fields: [checkInId], references: [id])
+  tenantId            String
+  tenant              Tenant       @relation(fields: [tenantId], references: [id])
+  organizationId      String
+  organization        Organization @relation(fields: [organizationId], references: [id])
+  consumerId          String
+  consumer            Consumer     @relation(fields: [consumerId], references: [id])
+  reviewerUserId      String?
+  reviewer            User?        @relation(fields: [reviewerUserId], references: [id])
+  status              String       @default("pending")
+  followUpStatus      String       @default("not_needed")
+  reviewNote          String?
+  reviewedAt          DateTime?
   outreachCompletedAt DateTime?
-  riskFlagged        Boolean      @default(false)
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  riskFlagged         Boolean      @default(false)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
 
   @@index([consumerId, updatedAt])
   @@index([organizationId, status])
 }
 
 model JournalEntry {
-  id         String   @id @default(cuid())
-  consumerId String
-  consumer   Consumer @relation(fields: [consumerId], references: [id])
-  title      String
-  content    String
-  moodScore  Int?
-  theme      String?
-  sharedWithCareTeam Boolean @default(false)
-  aiSummary  String?
-  createdAt  DateTime @default(now())
+  id                 String   @id @default(cuid())
+  organizationId     String
+  consumerId         String
+  consumer           Consumer @relation(fields: [consumerId], references: [id])
+  title              String
+  content            String
+  moodScore          Int?
+  theme              String?
+  sharedWithCareTeam Boolean  @default(false)
+  aiSummary          String?
+  createdAt          DateTime @default(now())
 }
 
 model ClinicalNote {
@@ -247,42 +360,46 @@ model ClinicalNote {
 }
 
 model Goal {
-  id         String    @id @default(cuid())
-  consumerId String
-  consumer   Consumer  @relation(fields: [consumerId], references: [id])
-  title      String
-  description String?
-  category   String?
-  targetLabel String?
-  status     String
-  targetDate DateTime?
+  id             String    @id @default(cuid())
+  organizationId String
+  consumerId     String
+  consumer       Consumer  @relation(fields: [consumerId], references: [id])
+  title          String
+  description    String?
+  category       String?
+  targetLabel    String?
+  status         String
+  targetDate     DateTime?
 }
 
 model Routine {
-  id           String              @id @default(cuid())
-  consumerId   String
-  consumer     Consumer            @relation(fields: [consumerId], references: [id])
-  title        String
-  description  String?
-  category     String?
-  frequency    String
-  targetPerWeek Int?
-  isActive     Boolean             @default(true)
-  completions  RoutineCompletion[]
+  id             String              @id @default(cuid())
+  organizationId String
+  consumerId     String
+  consumer       Consumer            @relation(fields: [consumerId], references: [id])
+  title          String
+  description    String?
+  category       String?
+  frequency      String
+  targetPerWeek  Int?
+  isActive       Boolean             @default(true)
+  completions    RoutineCompletion[]
 }
 
 model RoutineCompletion {
-  id             String    @id @default(cuid())
+  id             String   @id @default(cuid())
+  organizationId String
   routineId      String
-  routine        Routine   @relation(fields: [routineId], references: [id])
+  routine        Routine  @relation(fields: [routineId], references: [id])
   completionDate DateTime
-  createdAt      DateTime  @default(now())
+  createdAt      DateTime @default(now())
 
   @@unique([routineId, completionDate])
 }
 
 model RecoveryPlan {
   id               String   @id @default(cuid())
+  organizationId   String
   consumerId       String   @unique
   consumer         Consumer @relation(fields: [consumerId], references: [id])
   summary          String
@@ -298,6 +415,7 @@ model RecoveryPlan {
 
 model ConsumerCondition {
   id                   String          @id @default(cuid())
+  organizationId       String
   consumerId           String
   consumer             Consumer        @relation(fields: [consumerId], references: [id])
   name                 String
@@ -308,13 +426,14 @@ model ConsumerCondition {
 }
 
 model TreatmentPlan {
-  id            String    @id @default(cuid())
-  consumerId    String
-  consumer      Consumer  @relation(fields: [consumerId], references: [id])
-  clinicianId   String?
-  goals         Json
-  interventions Json
-  reviewDate    DateTime?
+  id             String    @id @default(cuid())
+  organizationId String
+  consumerId     String
+  consumer       Consumer  @relation(fields: [consumerId], references: [id])
+  clinicianId    String?
+  goals          Json
+  interventions  Json
+  reviewDate     DateTime?
 }
 
 model Appointment {
@@ -331,13 +450,14 @@ model Appointment {
 }
 
 model SessionNote {
-  id            String      @id @default(cuid())
-  appointmentId String      @unique
-  appointment   Appointment @relation(fields: [appointmentId], references: [id])
-  subjective    String
-  objective     String
-  assessment    String
-  plan          String
+  id             String      @id @default(cuid())
+  organizationId String
+  appointmentId  String      @unique
+  appointment    Appointment @relation(fields: [appointmentId], references: [id])
+  subjective     String
+  objective      String
+  assessment     String
+  plan           String
 }
 
 model GroupSession {
@@ -352,6 +472,7 @@ model GroupSession {
 
 model MedicationRecord {
   id             String   @id @default(cuid())
+  organizationId String
   consumerId     String
   consumer       Consumer @relation(fields: [consumerId], references: [id])
   medicationName String
@@ -377,20 +498,22 @@ model InsurancePlan {
 }
 
 model Coverage {
-  id             String          @id @default(cuid())
-  consumerId     String
-  consumer       Consumer        @relation(fields: [consumerId], references: [id])
-  planId         String
-  plan           InsurancePlan   @relation(fields: [planId], references: [id])
-  memberId       String
-  groupNumber    String?
-  isActive       Boolean         @default(true)
-  authorizations Authorization[]
+  id               String            @id @default(cuid())
+  organizationId   String
+  consumerId       String
+  consumer         Consumer          @relation(fields: [consumerId], references: [id])
+  planId           String
+  plan             InsurancePlan     @relation(fields: [planId], references: [id])
+  memberId         String
+  groupNumber      String?
+  isActive         Boolean           @default(true)
+  authorizations   Authorization[]
   billingWorkItems BillingWorkItem[]
 }
 
 model Authorization {
   id              String   @id @default(cuid())
+  organizationId  String
   coverageId      String
   coverage        Coverage @relation(fields: [coverageId], references: [id])
   serviceType     String
@@ -400,25 +523,26 @@ model Authorization {
 }
 
 model Encounter {
-  id             String       @id @default(cuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id])
-  consumerId     String
-  consumer       Consumer     @relation(fields: [consumerId], references: [id])
-  appointmentId  String?
-  serviceCode    String
-  status         String
-  charges        Charge[]
-  claims         Claim[]
+  id               String            @id @default(cuid())
+  organizationId   String
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  consumerId       String
+  consumer         Consumer          @relation(fields: [consumerId], references: [id])
+  appointmentId    String?
+  serviceCode      String
+  status           String
+  charges          Charge[]
+  claims           Claim[]
   billingWorkItems BillingWorkItem[]
 }
 
 model Charge {
-  id          String    @id @default(cuid())
-  encounterId String
-  encounter   Encounter @relation(fields: [encounterId], references: [id])
-  cptCode     String
-  amountCents Int
+  id             String    @id @default(cuid())
+  organizationId String
+  encounterId    String
+  encounter      Encounter @relation(fields: [encounterId], references: [id])
+  cptCode        String
+  amountCents    Int
 }
 
 model FeeSchedule {
@@ -430,39 +554,40 @@ model FeeSchedule {
 }
 
 model Claim {
-  id           String      @id @default(cuid())
-  encounterId  String
-  encounter    Encounter   @relation(fields: [encounterId], references: [id])
-  status       ClaimStatus
-  billedCents  Int
-  paidCents    Int?
-  denialReason String?
-  denials      Denial[]
-  remittance   Remittance?
+  id               String            @id @default(cuid())
+  organizationId   String
+  encounterId      String
+  encounter        Encounter         @relation(fields: [encounterId], references: [id])
+  status           ClaimStatus
+  billedCents      Int
+  paidCents        Int?
+  denialReason     String?
+  denials          Denial[]
+  remittance       Remittance?
   billingWorkItems BillingWorkItem[]
 }
 
 model BillingWorkItem {
-  id              String                @id @default(cuid())
+  id              String                    @id @default(cuid())
   tenantId        String
-  tenant          Tenant                @relation(fields: [tenantId], references: [id])
+  tenant          Tenant                    @relation(fields: [tenantId], references: [id])
   organizationId  String
-  organization    Organization          @relation(fields: [organizationId], references: [id])
+  organization    Organization              @relation(fields: [organizationId], references: [id])
   consumerId      String
-  consumer        Consumer              @relation(fields: [consumerId], references: [id])
+  consumer        Consumer                  @relation(fields: [consumerId], references: [id])
   encounterId     String?
-  encounter       Encounter?            @relation(fields: [encounterId], references: [id])
+  encounter       Encounter?                @relation(fields: [encounterId], references: [id])
   claimId         String?
-  claim           Claim?                @relation(fields: [claimId], references: [id])
+  claim           Claim?                    @relation(fields: [claimId], references: [id])
   coverageId      String?
-  coverage        Coverage?             @relation(fields: [coverageId], references: [id])
+  coverage        Coverage?                 @relation(fields: [coverageId], references: [id])
   createdByUserId String
-  createdBy       User                  @relation("BillingWorkItemCreatedBy", fields: [createdByUserId], references: [id])
+  createdBy       User                      @relation("BillingWorkItemCreatedBy", fields: [createdByUserId], references: [id])
   updatedByUserId String?
-  updatedBy       User?                 @relation("BillingWorkItemUpdatedBy", fields: [updatedByUserId], references: [id])
+  updatedBy       User?                     @relation("BillingWorkItemUpdatedBy", fields: [updatedByUserId], references: [id])
   title           String
-  status          BillingWorkItemStatus @default(draft)
-  priority        String                @default("normal")
+  status          BillingWorkItemStatus     @default(draft)
+  priority        String                    @default("normal")
   payerName       String?
   issueSummary    String?
   nextAction      String?
@@ -471,81 +596,86 @@ model BillingWorkItem {
   submittedAt     DateTime?
   notes           BillingNote[]
   activities      BillingWorkItemActivity[]
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
 
   @@index([organizationId, status, updatedAt])
   @@index([consumerId, updatedAt])
 }
 
 model BillingNote {
-  id              String          @id @default(cuid())
-  tenantId        String
-  tenant          Tenant          @relation(fields: [tenantId], references: [id])
-  organizationId  String
-  organization    Organization    @relation(fields: [organizationId], references: [id])
-  consumerId      String
-  consumer        Consumer        @relation(fields: [consumerId], references: [id])
-  workItemId      String?
-  workItem        BillingWorkItem? @relation(fields: [workItemId], references: [id])
-  authorUserId    String
-  author          User            @relation("BillingNoteAuthor", fields: [authorUserId], references: [id])
-  noteType        String          @default("billing_note")
-  body            String
-  createdAt       DateTime        @default(now())
+  id             String           @id @default(cuid())
+  tenantId       String
+  tenant         Tenant           @relation(fields: [tenantId], references: [id])
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  consumerId     String
+  consumer       Consumer         @relation(fields: [consumerId], references: [id])
+  workItemId     String?
+  workItem       BillingWorkItem? @relation(fields: [workItemId], references: [id])
+  authorUserId   String
+  author         User             @relation("BillingNoteAuthor", fields: [authorUserId], references: [id])
+  noteType       String           @default("billing_note")
+  body           String
+  createdAt      DateTime         @default(now())
 
   @@index([consumerId, createdAt])
   @@index([workItemId, createdAt])
 }
 
 model BillingWorkItemActivity {
-  id              String          @id @default(cuid())
-  workItemId      String
-  workItem        BillingWorkItem @relation(fields: [workItemId], references: [id])
-  actorUserId     String?
-  actor           User?           @relation("BillingWorkItemActivityActor", fields: [actorUserId], references: [id])
-  action          String
-  fromStatus      BillingWorkItemStatus?
-  toStatus        BillingWorkItemStatus?
-  detail          String?
-  createdAt       DateTime        @default(now())
+  id             String                 @id @default(cuid())
+  organizationId String
+  workItemId     String
+  workItem       BillingWorkItem        @relation(fields: [workItemId], references: [id])
+  actorUserId    String?
+  actor          User?                  @relation("BillingWorkItemActivityActor", fields: [actorUserId], references: [id])
+  action         String
+  fromStatus     BillingWorkItemStatus?
+  toStatus       BillingWorkItemStatus?
+  detail         String?
+  createdAt      DateTime               @default(now())
 
   @@index([workItemId, createdAt])
 }
 
 model Remittance {
-  id          String   @id @default(cuid())
-  claimId     String   @unique
-  claim       Claim    @relation(fields: [claimId], references: [id])
-  amountCents Int
-  receivedAt  DateTime
+  id             String   @id @default(cuid())
+  organizationId String
+  claimId        String   @unique
+  claim          Claim    @relation(fields: [claimId], references: [id])
+  amountCents    Int
+  receivedAt     DateTime
 }
 
 model Denial {
-  id       String  @id @default(cuid())
-  claimId  String
-  claim    Claim   @relation(fields: [claimId], references: [id])
-  code     String
-  reason   String
-  resolved Boolean @default(false)
+  id             String  @id @default(cuid())
+  organizationId String
+  claimId        String
+  claim          Claim   @relation(fields: [claimId], references: [id])
+  code           String
+  reason         String
+  resolved       Boolean @default(false)
 }
 
 model PatientLedgerEntry {
-  id          String   @id @default(cuid())
-  consumerId  String
-  consumer    Consumer @relation(fields: [consumerId], references: [id])
-  type        String
-  amountCents Int
-  occurredAt  DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String
+  consumerId     String
+  consumer       Consumer @relation(fields: [consumerId], references: [id])
+  type           String
+  amountCents    Int
+  occurredAt     DateTime @default(now())
 }
 
 model Invoice {
-  id         String    @id @default(cuid())
-  consumerId String
-  consumer   Consumer  @relation(fields: [consumerId], references: [id])
-  status     String
-  totalCents Int
-  dueDate    DateTime?
+  id             String    @id @default(cuid())
+  organizationId String
+  consumerId     String
+  consumer       Consumer  @relation(fields: [consumerId], references: [id])
+  status         String
+  totalCents     Int
+  dueDate        DateTime?
 }
 
 model PromptRegistry {
@@ -573,14 +703,22 @@ model AiRun {
 }
 
 model AuditLog {
-  id         String   @id @default(cuid())
-  tenantId   String
-  tenant     Tenant   @relation(fields: [tenantId], references: [id])
-  userId     String?
-  user       User?    @relation(fields: [userId], references: [id])
-  action     String
-  entityType String
-  entityId   String?
-  metadata   Json?
-  createdAt  DateTime @default(now())
+  id                     String   @id @default(cuid())
+  tenantId               String
+  tenant                 Tenant   @relation(fields: [tenantId], references: [id])
+  userId                 String?
+  user                   User?    @relation(fields: [userId], references: [id])
+  organizationId         String?
+  sessionId              String?
+  supportAccessSessionId String?
+  supportMode            Boolean  @default(false)
+  action                 String
+  entityType             String
+  entityId               String?
+  metadata               Json?
+  createdAt              DateTime @default(now())
+
+  @@index([organizationId])
+  @@index([sessionId])
+  @@index([supportAccessSessionId])
 }

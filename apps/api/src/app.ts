@@ -47,11 +47,21 @@ export function buildApp() {
   app.addHook('onResponse', async (request, reply) => {
     if (request.url.startsWith('/v1')) {
       audit.record({
-        tenantId: request.auth?.tenantId ?? 'unknown',
-        userId: request.auth?.userId,
+        tenantId: request.access?.tenantId ?? 'unknown',
+        userId: request.access?.userId,
+        organizationId: request.access?.activeOrganizationId ?? null,
+        sessionId: request.access?.sessionId ?? null,
+        supportAccessSessionId: request.access?.supportAccessSessionId ?? null,
+        supportMode: request.access?.supportMode ?? false,
         action: `${request.method} ${request.url}`,
         entityType: 'api_request',
-        metadata: { statusCode: reply.statusCode }
+        metadata: {
+          statusCode: reply.statusCode,
+          sessionId: request.access?.sessionId ?? null,
+          supportAccessSessionId: request.access?.supportAccessSessionId ?? null,
+          supportMode: request.access?.supportMode ?? false,
+          organizationId: request.access?.activeOrganizationId ?? null
+        }
       });
     }
   });
