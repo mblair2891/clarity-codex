@@ -1,35 +1,17 @@
-FROM node:20-alpine AS deps
+FROM node:20-alpine AS base
 WORKDIR /app
-COPY package.json package-lock.json tsconfig.base.json ./
+COPY package.json tsconfig.base.json ./
 COPY apps/api/package.json apps/api/package.json
-COPY apps/web/package.json apps/web/package.json
 COPY packages/domain/package.json packages/domain/package.json
-RUN npm ci
-
-FROM node:20-alpine AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+RUN npm install
 COPY . .
-RUN npm run prisma:generate
-RUN npm run build -w @clarity/domain
-RUN npm run build -w @clarity/api
-RUN npm prune --omit=dev
+RUN npm run build -w @clarity/domain && npm run build -w @clarity/api
 
-FROM node:20-alpine AS runner
+FROM node:20-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-ENV PORT=4000
-ENV HOST=0.0.0.0
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/apps/api/dist ./apps/api/dist
-COPY --from=builder /app/apps/api/package.json ./apps/api/package.json
-COPY --from=builder /app/packages/domain/dist ./packages/domain/dist
-COPY --from=builder /app/packages/domain/package.json ./packages/domain/package.json
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/scripts/seed-beta.mjs ./scripts/seed-beta.mjs
-COPY --from=builder /app/scripts/bootstrap-admin.mjs ./scripts/bootstrap-admin.mjs
-COPY --from=builder /app/scripts/lib ./scripts/lib
-EXPOSE 4000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD node -e "fetch('http://127.0.0.1:4000/health').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1));"
+COPY --from=base /app/package.json ./package.json
+COPY --from=base /app/node_modules ./node_modules
+COPY --from=base /app/apps/api/dist ./apps/api/dist
+COPY --from=base /app/packages/domain/dist ./packages/domain/dist
 CMD ["node", "apps/api/dist/index.js"]

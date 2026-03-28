@@ -6,10 +6,6 @@ export interface AuditEvent {
   entityType: string;
   entityId?: string;
   userId?: string;
-  organizationId?: string | null;
-  sessionId?: string | null;
-  supportAccessSessionId?: string | null;
-  supportMode?: boolean;
   metadata?: Record<string, unknown>;
 }
 

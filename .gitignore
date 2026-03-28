@@ -5,10 +5,6 @@ coverage
 .env
 .env.local
 pnpm-lock.yaml
+package-lock.json
 *.log
 .prisma
-*.tsbuildinfo
-.terraform
-/aws/
-/awscliv2.zip
-packages/domain/src/*.js

@@ -6,9 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "node ../../scripts/web-typecheck.mjs",
+    "lint": "tsc -p tsconfig.json --noEmit",
     "test": "node -e \"console.log('No frontend tests yet')\"",
-    "typecheck": "node ../../scripts/web-typecheck.mjs"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@clarity/domain": "0.1.0",
