@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build -w @clarity/domain && tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "lint": "npm run build -w @clarity/domain && tsc -p tsconfig.json --noEmit",
+    "test": "npm run build -w @clarity/domain && vitest run",
+    "typecheck": "npm run build -w @clarity/domain && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@clarity/domain": "0.1.0",

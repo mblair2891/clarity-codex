@@ -16,7 +16,14 @@
     "test": "npm run test --workspaces",
     "typecheck": "npm run typecheck --workspaces",
     "prisma:generate": "prisma generate",
-    "prisma:format": "prisma format"
+    "prisma:format": "prisma format",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:migrate:status": "prisma migrate status",
+    "db:seed": "node scripts/seed-beta.mjs",
+    "db:cleanup": "node scripts/cleanup-beta-data.mjs",
+    "db:verify-clean": "node scripts/verify-beta-clean.mjs",
+    "db:bootstrap-admin": "node scripts/bootstrap-admin.mjs",
+    "db:backfill:access-phase1": "node scripts/backfill-access-phase1.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",

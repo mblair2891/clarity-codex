@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { permissions } from '../lib/access/permissions.js';
+import { requireRoutePermission } from '../lib/access/route-permissions.js';
 import { AiService } from '../services/ai.service.js';
 
 const aiSchema = z.object({
@@ -11,13 +13,19 @@ export async function aiRoutes(app: FastifyInstance) {
   const aiService = new AiService();
 
   app.post('/v1/ai/assist', async (request, reply) => {
-    await app.verifyTenantRole(request, ['consumer', 'clinician', 'case_manager', 'billing', 'org_admin', 'platform_admin']);
+    await app.authenticateRequest(request);
+    requireRoutePermission(request, permissions.aiAssistUse);
+    const access = request.access;
     const payload = aiSchema.parse(request.body);
+
+    if (!access) {
+      throw new Error('Authentication context was not established.');
+    }
 
     return reply.send(
       aiService.generate({
-        tenantId: request.auth.tenantId,
-        role: request.auth.role,
+        tenantId: access.tenantId,
+        role: access.legacyRole,
         ...payload
       })
     );
