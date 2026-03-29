@@ -60,6 +60,10 @@ export function RoleShell({
   const pathname = usePathname();
   const shellRole = session ? getShellRoleForSession(session) : role;
   const items = navigation.filter((item) => item.roles.includes(shellRole));
+  const activeHref =
+    items
+      .filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
+      .sort((left, right) => right.href.length - left.href.length)[0]?.href ?? null;
   const isSupportMode = Boolean(session && sessionIsSupportMode(session));
   const isPlatformMode = Boolean(session && sessionIsPlatformMode(session));
 
@@ -82,8 +86,8 @@ export function RoleShell({
             <Link
               key={item.href}
               href={item.href}
-              className={`navCard${pathname === item.href || pathname.startsWith(`${item.href}/`) ? ' navCardActive' : ''}`}
-              aria-current={pathname === item.href || pathname.startsWith(`${item.href}/`) ? 'page' : undefined}
+              className={`navCard${activeHref === item.href ? ' navCardActive' : ''}`}
+              aria-current={activeHref === item.href ? 'page' : undefined}
             >
               <strong>{item.title}</strong>
               <span>{item.description}</span>

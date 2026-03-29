@@ -1,444 +1,281 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { RoleShell } from './role-shell';
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import {
-  ApiResponseError,
-  clearStoredToken,
-  endSupportSession,
-  fetchMe,
   fetchPlatformDashboard,
-  getApiBaseUrlState,
-  getLandingPathForSession,
-  getStoredToken,
-  sessionHasPlatformAuthority,
-  sessionIsPlatformMode,
-  startSupportSession,
-  storeToken,
-  type AuthMeResponse,
   type PlatformDashboardResponse
 } from '../lib/beta-auth';
-
-type SupportFormState = {
-  organizationId: string;
-  locationId: string;
-  reason: string;
-  ticketReference: string;
-};
-
-const defaultSupportFormState: SupportFormState = {
-  organizationId: '',
-  locationId: '',
-  reason: '',
-  ticketReference: ''
-};
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium'
-  }).format(new Date(value));
-}
+import {
+  PlatformWorkspaceShell,
+  formatDate,
+  formatDateTime,
+  formatRoleLabel,
+  toneForSupportStatus,
+  usePlatformWorkspace
+} from './platform-workspace';
 
 export function PlatformDashboard() {
-  const router = useRouter();
-  const { apiBaseUrl, error: apiBaseUrlError } = getApiBaseUrlState();
-  const [me, setMe] = useState<AuthMeResponse | null>(null);
+  const {
+    apiBaseUrl,
+    me,
+    error,
+    setError,
+    isSessionLoading,
+    getTokenOrRedirect,
+    handleLogout,
+    handleEndSupport,
+    handleApiError
+  } = usePlatformWorkspace();
   const [dashboard, setDashboard] = useState<PlatformDashboardResponse | null>(null);
-  const [supportForm, setSupportForm] = useState<SupportFormState>(defaultSupportFormState);
-  const [error, setError] = useState<string | null>(apiBaseUrlError);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isStartingSupport, setIsStartingSupport] = useState(false);
-  const [isEndingSupport, setIsEndingSupport] = useState(false);
-
-  const selectedOrganization = useMemo(
-    () => dashboard?.organizations.find((organization) => organization.id === supportForm.organizationId) ?? null,
-    [dashboard, supportForm.organizationId]
-  );
-  const locationOptions = selectedOrganization?.locations.filter((location) => location.isActive) ?? [];
-  const isPlatformMode = me ? sessionIsPlatformMode(me) : false;
-
-  async function loadPlatformWorkspace(token: string, knownSession?: AuthMeResponse) {
-    if (!apiBaseUrl) {
-      setError(apiBaseUrlError);
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      const session = knownSession ?? (await fetchMe(apiBaseUrl, token));
-      if (!sessionHasPlatformAuthority(session)) {
-        router.replace(getLandingPathForSession(session));
-        return;
-      }
-
-      const nextDashboard = await fetchPlatformDashboard(apiBaseUrl, token);
-
-      setMe(session);
-      setDashboard(nextDashboard);
-      setSupportForm((current) => {
-        const nextOrganizationId = nextDashboard.organizations.some((organization) => organization.id === current.organizationId)
-          ? current.organizationId
-          : nextDashboard.organizations[0]?.id ?? '';
-        const nextOrganization = nextDashboard.organizations.find((organization) => organization.id === nextOrganizationId);
-        const nextLocationId =
-          nextOrganization?.locations.some((location) => location.id === current.locationId && location.isActive)
-            ? current.locationId
-            : '';
-
-        return {
-          ...current,
-          organizationId: nextOrganizationId,
-          locationId: nextLocationId
-        };
-      });
-      setError(null);
-    } catch (loadError) {
-      if (loadError instanceof ApiResponseError && loadError.status === 401) {
-        clearStoredToken();
-        router.replace('/login');
-        return;
-      }
-
-      setError(loadError instanceof Error ? loadError.message : 'Unable to load the platform workspace right now.');
-    } finally {
-      setIsLoading(false);
-    }
-  }
+  const [isLoadingDashboard, setIsLoadingDashboard] = useState(true);
 
   useEffect(() => {
-    if (!apiBaseUrl) {
-      setError(apiBaseUrlError);
-      setIsLoading(false);
+    if (!apiBaseUrl || !me) {
       return;
     }
 
-    const token = getStoredToken();
+    const token = getTokenOrRedirect();
     if (!token) {
-      router.replace('/login');
       return;
     }
 
-    loadPlatformWorkspace(token).catch(() => {});
-  }, [apiBaseUrl, apiBaseUrlError, router]);
+    setIsLoadingDashboard(true);
 
-  function handleLogout() {
-    clearStoredToken();
-    router.replace('/login');
-  }
-
-  async function handleEndSupport() {
-    if (!apiBaseUrl) {
-      setError(apiBaseUrlError);
-      return;
-    }
-
-    const token = getStoredToken();
-    if (!token) {
-      router.replace('/login');
-      return;
-    }
-
-    setIsEndingSupport(true);
-    setError(null);
-    setSuccess(null);
-
-    try {
-      const response = await endSupportSession(apiBaseUrl, token);
-      storeToken(response.token);
-      const session = await fetchMe(apiBaseUrl, response.token);
-
-      setMe(session);
-      setSuccess('Support session ended. You are back in platform mode.');
-      await loadPlatformWorkspace(response.token, session);
-      router.replace(getLandingPathForSession(session));
-    } catch (actionError) {
-      if (actionError instanceof ApiResponseError && actionError.status === 401) {
-        clearStoredToken();
-        router.replace('/login');
-        return;
-      }
-
-      setError(actionError instanceof Error ? actionError.message : 'Unable to end the active support session.');
-    } finally {
-      setIsEndingSupport(false);
-    }
-  }
-
-  async function handleStartSupport(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!apiBaseUrl) {
-      setError(apiBaseUrlError);
-      return;
-    }
-
-    const token = getStoredToken();
-    if (!token) {
-      router.replace('/login');
-      return;
-    }
-
-    if (!supportForm.organizationId || supportForm.reason.trim().length < 3) {
-      setError('Choose an organization and enter a short support reason before starting a session.');
-      return;
-    }
-
-    setIsStartingSupport(true);
-    setError(null);
-    setSuccess(null);
-
-    try {
-      const response = await startSupportSession(apiBaseUrl, token, {
-        organizationId: supportForm.organizationId,
-        locationId: supportForm.locationId || undefined,
-        reason: supportForm.reason.trim(),
-        ticketReference: supportForm.ticketReference.trim() || undefined
+    fetchPlatformDashboard(apiBaseUrl, token)
+      .then((response) => {
+        setDashboard(response);
+        setError(null);
+      })
+      .catch((loadError) => {
+        setError(handleApiError(loadError, 'Unable to load the platform control plane.'));
+      })
+      .finally(() => {
+        setIsLoadingDashboard(false);
       });
+  }, [apiBaseUrl, me]);
 
-      storeToken(response.token);
-      const session = await fetchMe(apiBaseUrl, response.token);
-      setMe(session);
-      router.replace(getLandingPathForSession(session));
-    } catch (actionError) {
-      if (actionError instanceof ApiResponseError && actionError.status === 401) {
-        clearStoredToken();
-        router.replace('/login');
-        return;
-      }
-
-      setError(actionError instanceof Error ? actionError.message : 'Unable to start a support session.');
-    } finally {
-      setIsStartingSupport(false);
-    }
-  }
+  const canManageOrganizations = Boolean(me?.accessContext.platformRoles.includes('platform_admin'));
 
   return (
-    <RoleShell role="platform_admin" title="Platform Home" session={me} onLogout={handleLogout} onEndSupport={handleEndSupport}>
-      <div className="adminStack">
-        <section className="card consumerHero adminHero">
-          <div className="consumerHeroTop">
-            <div>
-              <p className="eyebrow">Platform beta workspace</p>
-              <h2 className="consumerHeading" style={{ marginBottom: 8 }}>
-                {me ? `Platform access for ${me.user.fullName.split(' ')[0]}` : 'Loading platform workspace'}
-              </h2>
-              <p className="muted consumerLead">
-                See platform-wide beta counts, choose an organization, and enter support mode without dropping into a tenant-style dashboard first.
-              </p>
-            </div>
-            <div className="pillRow">
-              <span className={`statusPill ${isPlatformMode ? 'success' : 'warning'}`}>
-                {me?.accessContext.supportMode ? 'Support mode active' : 'Platform mode active'}
-              </span>
-              <span className="statusPill neutral">{dashboard?.tenant.name ?? 'Loading tenant'}</span>
-            </div>
+    <PlatformWorkspaceShell title="Platform Control" session={me} onLogout={handleLogout} onEndSupport={handleEndSupport}>
+      <section className="card consumerHero adminHero">
+        <div className="consumerHeroTop">
+          <div>
+            <p className="eyebrow">SaaS control plane</p>
+            <h2 className="consumerHeading" style={{ marginBottom: 8 }}>
+              {me ? `Clarity platform control for ${me.user.fullName.split(' ')[0]}` : 'Loading platform control plane'}
+            </h2>
+            <p className="muted consumerLead">
+              Manage organizations, review platform access, monitor support activity, and keep support mode available as a scoped tool instead of the entire platform surface.
+            </p>
           </div>
-          {error ? <div className="banner bannerError" style={{ marginBottom: 0 }}>{error}</div> : null}
-          {success ? <div className="banner bannerSuccess" style={{ marginBottom: 0 }}>{success}</div> : null}
-        </section>
+          <div className="pillRow">
+            <span className="statusPill success">{me?.accessContext.platformRoles.join(' + ') || 'Loading roles'}</span>
+            <span className="statusPill neutral">{dashboard?.tenant.name ?? me?.tenant.name ?? 'Loading tenant'}</span>
+            <span className={`statusPill ${me?.accessContext.supportMode ? 'warning' : 'focus'}`}>
+              {me?.accessContext.supportMode ? 'Support mode active' : 'Platform mode active'}
+            </span>
+          </div>
+        </div>
+        <div className="actionRow">
+          {canManageOrganizations ? (
+            <Link href="/platform/organizations/new" className="primaryButton">
+              Create Organization
+            </Link>
+          ) : null}
+          <Link href="/platform/support" className="secondaryButton">
+            Open Support Tools
+          </Link>
+        </div>
+        {error ? <div className="banner bannerError" style={{ marginBottom: 0 }}>{error}</div> : null}
+      </section>
 
-        <section className="grid">
-          <article className="card">
-            <span className="muted">Organizations</span>
-            <span className="metric">{dashboard?.counts.organizations ?? (isLoading ? '...' : 0)}</span>
-            <p className="muted">Active beta organizations in the current tenant.</p>
-          </article>
-          <article className="card">
-            <span className="muted">Users</span>
-            <span className="metric">{dashboard?.counts.users ?? (isLoading ? '...' : 0)}</span>
-            <p className="muted">Named platform and organization users in scope.</p>
-          </article>
-          <article className="card">
-            <span className="muted">Consumers</span>
-            <span className="metric">{dashboard?.counts.consumers ?? (isLoading ? '...' : 0)}</span>
-            <p className="muted">Consumer profiles available for beta testing.</p>
-          </article>
-          <article className="card">
-            <span className="muted">My active support sessions</span>
-            <span className="metric">{dashboard?.counts.activeSupportSessions ?? (isLoading ? '...' : 0)}</span>
-            <p className="muted">Support access sessions currently attached to your account.</p>
-          </article>
-        </section>
+      <section className="grid">
+        <article className="card">
+          <span className="muted">Organizations</span>
+          <span className="metric">{dashboard?.summary.totalOrganizations ?? (isSessionLoading || isLoadingDashboard ? '...' : 0)}</span>
+          <p className="muted">Organizations currently managed by the Clarity platform team.</p>
+        </article>
+        <article className="card">
+          <span className="muted">Platform users</span>
+          <span className="metric">{dashboard?.summary.totalPlatformUsers ?? (isSessionLoading || isLoadingDashboard ? '...' : 0)}</span>
+          <p className="muted">Platform admins and support operators with control-plane access.</p>
+        </article>
+        <article className="card">
+          <span className="muted">Org users</span>
+          <span className="metric">{dashboard?.summary.totalOrgUsers ?? (isSessionLoading || isLoadingDashboard ? '...' : 0)}</span>
+          <p className="muted">Users attached to clinic organizations across the tenant.</p>
+        </article>
+        <article className="card">
+          <span className="muted">Consumers</span>
+          <span className="metric">{dashboard?.summary.totalConsumers ?? (isSessionLoading || isLoadingDashboard ? '...' : 0)}</span>
+          <p className="muted">Consumer records in the platform footprint.</p>
+        </article>
+        <article className="card">
+          <span className="muted">Active support sessions</span>
+          <span className="metric">{dashboard?.summary.activeSupportSessions ?? (isSessionLoading || isLoadingDashboard ? '...' : 0)}</span>
+          <p className="muted">Scoped org support sessions that are live right now.</p>
+        </article>
+        <article className="card">
+          <span className="muted">Subscriptions</span>
+          <span className="metric">{dashboard?.summary.subscriptionsByStatus[0]?.count ?? (isSessionLoading || isLoadingDashboard ? '...' : 0)}</span>
+          <p className="muted">Billing is scaffolded for beta, so organizations currently sit in a not-configured status bucket.</p>
+        </article>
+      </section>
 
-        {me?.accessContext.supportMode ? (
-          <section className="card">
-            <div className="sectionHeaderRow">
-              <div>
-                <h2 className="sectionTitle">Support session active</h2>
-                <p className="muted">You are currently attached to an organization support session. Return to the org workspace or end the session here.</p>
-              </div>
-              <div className="consumerActions">
-                <button type="button" className="primaryButton" onClick={() => router.push('/admin')}>
-                  Open Org Admin View
-                </button>
-                <button type="button" className="secondaryButton" onClick={handleEndSupport} disabled={isEndingSupport}>
-                  {isEndingSupport ? 'Ending...' : 'End Support Session'}
-                </button>
-              </div>
-            </div>
-          </section>
-        ) : null}
-
-        <section className="adminPanelGrid" id="start-support-form">
-          <article className="card">
-            <div className="sectionHeaderRow">
-              <div>
-                <h2 className="sectionTitle">Start support session</h2>
-                <p className="muted">Choose the organization context you want to enter, optionally narrow to a location, and capture why you are accessing the workspace.</p>
-              </div>
-            </div>
-            <form onSubmit={handleStartSupport} className="consumerStack" style={{ gap: 16, marginTop: 16 }}>
-              <label className="fieldLabel">
-                Organization
-                <select
-                  className="inputField"
-                  value={supportForm.organizationId}
-                  onChange={(event) => setSupportForm((current) => ({ ...current, organizationId: event.target.value, locationId: '' }))}
-                >
-                  <option value="">Select an organization</option>
-                  {dashboard?.organizations.map((organization) => (
-                    <option key={organization.id} value={organization.id}>
-                      {organization.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="fieldLabel">
-                Location
-                <select
-                  className="inputField"
-                  value={supportForm.locationId}
-                  onChange={(event) => setSupportForm((current) => ({ ...current, locationId: event.target.value }))}
-                  disabled={!locationOptions.length}
-                >
-                  <option value="">All organization locations</option>
-                  {locationOptions.map((location) => (
-                    <option key={location.id} value={location.id}>
-                      {location.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="fieldLabel">
-                Reason
-                <textarea
-                  className="inputField textareaField"
-                  value={supportForm.reason}
-                  onChange={(event) => setSupportForm((current) => ({ ...current, reason: event.target.value }))}
-                  placeholder="Describe the beta testing issue, access need, or investigation."
-                />
-              </label>
-              <label className="fieldLabel">
-                Ticket or reference
-                <input
-                  className="inputField"
-                  value={supportForm.ticketReference}
-                  onChange={(event) => setSupportForm((current) => ({ ...current, ticketReference: event.target.value }))}
-                  placeholder="Optional ticket, incident, or beta feedback reference"
-                />
-              </label>
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button type="submit" className="primaryButton" disabled={isStartingSupport}>
-                  {isStartingSupport ? 'Starting Support Session...' : 'Start Support Session'}
-                </button>
-              </div>
-            </form>
-          </article>
-
-          <article className="card">
-            <div className="sectionHeaderRow">
-              <div>
-                <h2 className="sectionTitle">Current selection</h2>
-                <p className="muted">A quick preview of the organization you are about to enter.</p>
-              </div>
-            </div>
-            {selectedOrganization ? (
-              <div className="listItemCard">
-                <strong>{selectedOrganization.name}</strong>
-                <span className="muted">ID: {selectedOrganization.identifier}</span>
-                <span className="muted">
-                  {selectedOrganization.counts.users} users • {selectedOrganization.counts.consumers} consumers • {selectedOrganization.counts.locations} locations
-                </span>
-                <span className="muted">Created {formatDate(selectedOrganization.createdAt)}</span>
-              </div>
-            ) : (
-              <p className="muted">Choose an organization to preview the support context.</p>
-            )}
-          </article>
-        </section>
-
+      {me?.accessContext.supportMode ? (
         <section className="card">
           <div className="sectionHeaderRow">
             <div>
-              <h2 className="sectionTitle">Organizations</h2>
-              <p className="muted">Platform-level launcher for beta testing. Pick an organization to prefill the support session form.</p>
+              <h2 className="sectionTitle">Support session active</h2>
+              <p className="muted">Your current login is attached to an organization support session. Jump into the org workspace or end the session from the banner above.</p>
             </div>
-            <span className="statusPill neutral">{dashboard?.organizations.length ?? 0} organizations</span>
+            <div className="actionRow">
+              <Link href="/admin" className="primaryButton">
+                Open Org Admin
+              </Link>
+              <Link href="/platform/support" className="secondaryButton">
+                Support Tools
+              </Link>
+            </div>
           </div>
-          <div className="timeline" style={{ marginTop: 16 }}>
+        </section>
+      ) : null}
+
+      <section className="adminPanelGrid">
+        <article className="card">
+          <div className="sectionHeaderRow">
+            <div>
+              <h2 className="sectionTitle">Organization management</h2>
+              <p className="muted">This is the control-plane list for creating organizations, opening detail pages, and launching support access without treating support mode as the entire platform.</p>
+            </div>
+            <span className="statusPill neutral">{dashboard?.organizations.length ?? 0} orgs</span>
+          </div>
+          <div className="resourceList" style={{ marginTop: 16 }}>
             {dashboard?.organizations.length ? (
               dashboard.organizations.map((organization) => (
-                <article key={organization.id} className="listItemCard">
-                  <div className="sectionHeaderRow">
-                    <div>
-                      <strong>{organization.name}</strong>
-                      <div className="muted">ID: {organization.identifier}</div>
-                    </div>
-                    <button
-                      type="button"
-                      className="secondaryButton"
-                      onClick={() => {
-                        setSupportForm((current) => ({
-                          ...current,
-                          organizationId: organization.id,
-                          locationId: ''
-                        }));
-                        document.getElementById('start-support-form')?.scrollIntoView({ behavior: 'smooth' });
-                      }}
-                    >
-                      Support This Org
-                    </button>
+                <article key={organization.id} className="resourceRow">
+                  <div className="resourceRowPrimary">
+                    <strong>{organization.name}</strong>
+                    <span className="muted">
+                      {organization.slug ? `/${organization.slug}` : 'Slug pending backfill'} • Created {formatDate(organization.createdAt)}
+                    </span>
+                    <span className="muted">
+                      {organization.counts.users} users • {organization.counts.consumers} consumers • {organization.counts.locations} locations
+                    </span>
                   </div>
-                  <div className="adminSectionGrid" style={{ marginTop: 12 }}>
-                    <div className="listItemCard">
-                      <strong>Users</strong>
-                      <span className="metric" style={{ fontSize: 22 }}>{organization.counts.users}</span>
-                    </div>
-                    <div className="listItemCard">
-                      <strong>Consumers</strong>
-                      <span className="metric" style={{ fontSize: 22 }}>{organization.counts.consumers}</span>
-                    </div>
-                    <div className="listItemCard">
-                      <strong>Org admins</strong>
-                      <span className="metric" style={{ fontSize: 22 }}>{organization.counts.admins}</span>
-                    </div>
-                    <div className="listItemCard">
-                      <strong>Locations</strong>
-                      <span className="metric" style={{ fontSize: 22 }}>{organization.counts.locations}</span>
-                    </div>
+                  <div className="actionRow">
+                    <Link href={`/platform/organizations/${organization.id}`} className="secondaryButton">
+                      View Detail
+                    </Link>
+                    <Link href={`/platform/support?organizationId=${organization.id}`} className="primaryButton">
+                      Start Support
+                    </Link>
                   </div>
-                  {organization.locations.length ? (
-                    <div className="modeRow" style={{ marginTop: 12 }}>
-                      {organization.locations.map((location) => (
-                        <span key={location.id} className={`badge ${location.isActive ? 'calm' : 'focus'}`}>
-                          {location.name}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="muted" style={{ marginBottom: 0 }}>No locations configured.</p>
-                  )}
                 </article>
               ))
             ) : (
-              <p className="muted">No organizations are available yet for platform beta access.</p>
+              <div className="emptyState">
+                <strong>No organizations yet</strong>
+                <span className="muted">Create the first organization to start the beta platform flow.</span>
+              </div>
             )}
           </div>
-        </section>
-      </div>
-    </RoleShell>
+        </article>
+
+        <article className="card">
+          <div className="sectionHeaderRow">
+            <div>
+              <h2 className="sectionTitle">Billing and plan scaffolding</h2>
+              <p className="muted">The control plane now carries explicit SaaS subscription placeholders, even before real billing automation is wired in.</p>
+            </div>
+          </div>
+          <div className="timeline" style={{ marginTop: 16 }}>
+            {dashboard?.billing.plans.map((plan) => (
+              <article key={plan.name} className="listItemCard">
+                <strong>{plan.name}</strong>
+                <span className="muted">{plan.organizationCount} organizations assigned to this scaffolded plan</span>
+              </article>
+            ))}
+            {dashboard?.billing.subscriptionsByStatus.map((item) => (
+              <article key={item.status} className="listItemCard">
+                <strong>{formatRoleLabel(item.status)}</strong>
+                <span className="muted">{item.count} subscriptions in this bucket</span>
+              </article>
+            ))}
+            <article className="supportPanel">
+              <strong>Beta billing note</strong>
+              <p className="muted" style={{ marginBottom: 0 }}>
+                {dashboard?.billing.note ?? 'Loading billing scaffolding...'}
+              </p>
+            </article>
+          </div>
+        </article>
+      </section>
+
+      <section className="adminPanelGrid">
+        <article className="card">
+          <div className="sectionHeaderRow">
+            <div>
+              <h2 className="sectionTitle">Platform users</h2>
+              <p className="muted">Control-plane identities stay separate from organization admins, even when they can launch support mode.</p>
+            </div>
+            <Link href="/platform/support" className="secondaryButton">
+              Support Section
+            </Link>
+          </div>
+          <div className="timeline" style={{ marginTop: 16 }}>
+            {dashboard?.platformUsers.length ? (
+              dashboard.platformUsers.map((user) => (
+                <article key={user.id} className="listItemCard">
+                  <strong>{user.fullName}</strong>
+                  <span className="muted">{user.email}</span>
+                  <span className="muted">
+                    {user.platformRoles.length ? user.platformRoles.map(formatRoleLabel).join(' • ') : formatRoleLabel(user.role)}
+                  </span>
+                  <span className={`statusPill ${user.isActive ? 'success' : 'warning'}`}>
+                    {user.isActive ? 'active' : 'inactive'}
+                  </span>
+                </article>
+              ))
+            ) : (
+              <p className="muted">No platform users are available yet.</p>
+            )}
+          </div>
+        </article>
+
+        <article className="card">
+          <div className="sectionHeaderRow">
+            <div>
+              <h2 className="sectionTitle">Support tools</h2>
+              <p className="muted">Support is now a module inside platform admin. Recent sessions stay visible here, but the full launcher lives in its own section.</p>
+            </div>
+            <Link href="/platform/support" className="primaryButton">
+              Open Support Tools
+            </Link>
+          </div>
+          <div className="timeline" style={{ marginTop: 16 }}>
+            {dashboard?.support.recent.length ? (
+              dashboard.support.recent.map((session) => (
+                <article key={session.id} className="listItemCard">
+                  <strong>{session.supportUserName}</strong>
+                  <span className="muted">
+                    {session.organizationName ?? dashboard.organizations.find((organization) => organization.id === session.organizationId)?.name ?? 'Organization'}
+                  </span>
+                  <span className="muted">{session.reason ?? 'No support reason provided'}</span>
+                  <div className="pillRow">
+                    <span className={`statusPill ${toneForSupportStatus(session.status)}`}>{session.status}</span>
+                    <span className="statusPill neutral">{formatDateTime(session.startedAt)}</span>
+                  </div>
+                </article>
+              ))
+            ) : (
+              <p className="muted">No support sessions have been recorded yet.</p>
+            )}
+          </div>
+        </article>
+      </section>
+    </PlatformWorkspaceShell>
   );
 }

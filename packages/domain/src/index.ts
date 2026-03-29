@@ -23,7 +23,13 @@ export const navigation: NavigationItem[] = [
     title: 'Platform Home',
     href: '/platform',
     roles: ['platform_admin', 'support'],
-    description: 'Platform-level visibility, tenant summaries, and support session launch.'
+    description: 'SaaS control plane for organizations, platform access, billing scaffolding, and support entry.'
+  },
+  {
+    title: 'Support Tools',
+    href: '/platform/support',
+    roles: ['platform_admin', 'support'],
+    description: 'Scoped support-session launcher and support access history.'
   },
   {
     title: 'Recovery Hub',
