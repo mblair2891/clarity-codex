@@ -10,7 +10,7 @@ import {
   clearStoredToken,
   fetchMe,
   getApiBaseUrlState,
-  getDisplayRoleForShell,
+  getLandingPathForSession,
   getStoredToken,
   type AuthMeResponse
 } from '../lib/beta-auth';
@@ -438,8 +438,8 @@ export function ConsumerPortal() {
     try {
       const session = knownSession ?? await fetchMe(apiBaseUrl, token);
 
-      if (session.landingPath !== '/consumer') {
-        router.replace(session.landingPath);
+      if (getLandingPathForSession(session) !== '/consumer') {
+        router.replace(getLandingPathForSession(session));
         return;
       }
 
@@ -700,7 +700,7 @@ export function ConsumerPortal() {
   }
 
   return (
-    <RoleShell role={getDisplayRoleForShell(me?.user.role ?? 'consumer')} title="Recovery Hub">
+    <RoleShell role="consumer" title="Recovery Hub" session={me} onLogout={handleLogout}>
       {isLoading ? (
         <section className="consumerStack">
           <section className="consumerHero card">

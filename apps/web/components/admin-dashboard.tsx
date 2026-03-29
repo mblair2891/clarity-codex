@@ -8,11 +8,14 @@ import {
   ApiResponseError,
   apiFetch,
   clearStoredToken,
+  endSupportSession,
   fetchMe,
   getApiBaseUrlState,
-  getDisplayRoleForShell,
+  getLandingPathForSession,
   getStoredToken,
   resetSystemData,
+  sessionIsSupportMode,
+  storeToken,
   type AuthMeResponse,
   type ResetSystemResponse
 } from '../lib/beta-auth';
@@ -341,8 +344,8 @@ export function AdminDashboard() {
     }
 
     const currentSession = session ?? (await fetchMe(apiBaseUrl, token));
-    if (currentSession.user.role !== 'platform_admin' && currentSession.user.role !== 'org_admin') {
-      router.replace(currentSession.landingPath);
+    if (getLandingPathForSession(currentSession) !== '/admin') {
+      router.replace(getLandingPathForSession(currentSession));
       return;
     }
 
@@ -408,8 +411,13 @@ export function AdminDashboard() {
 
   const selectedTenant =
     dashboard?.manageableTenants.find((tenant) => tenant.slug === createForm.tenantSlug) ?? dashboard?.manageableTenants[0] ?? null;
+  const canUsePlatformControls = Boolean(
+    me?.user.role === 'platform_admin' && !me.accessContext.supportMode && !me.accessContext.activeOrganizationId
+  );
+  const isSupportView = Boolean(me && sessionIsSupportMode(me));
+  const assignableRoles = (dashboard?.assignableRoles ?? []).filter((role) => canUsePlatformControls || role !== 'platform_admin');
   const organizationOptions =
-    me?.user.role === 'platform_admin' ? selectedTenant?.organizations ?? [] : dashboard?.manageableTenants[0]?.organizations ?? [];
+    canUsePlatformControls ? selectedTenant?.organizations ?? [] : dashboard?.manageableTenants[0]?.organizations ?? [];
   const filteredUsers = dashboard?.users.filter((user) => {
     const matchesSearch =
       !userSearch ||
@@ -430,13 +438,37 @@ export function AdminDashboard() {
   const selectedUserTenant =
     dashboard?.manageableTenants.find((tenant) => tenant.id === selectedUser?.tenant.id || tenant.slug === selectedUser?.tenant.slug) ?? null;
   const editOrganizationOptions =
-    me?.user.role === 'platform_admin' ? selectedUserTenant?.organizations ?? [] : dashboard?.manageableTenants[0]?.organizations ?? [];
+    canUsePlatformControls ? selectedUserTenant?.organizations ?? [] : dashboard?.manageableTenants[0]?.organizations ?? [];
   const selectedOrganization = dashboard?.organizations.find((organization) => organization.id === selectedOrganizationId) ?? null;
   const organizationUsers = dashboard?.users.filter((user) => user.organizations.some((organization) => organization.id === selectedOrganizationId)) ?? [];
 
   function handleLogout() {
     clearStoredToken();
     router.replace('/login');
+  }
+
+  async function handleEndSupport() {
+    if (!apiBaseUrl) {
+      setError(apiBaseUrlError);
+      return;
+    }
+
+    const token = getStoredToken();
+    if (!token) {
+      router.replace('/login');
+      return;
+    }
+
+    try {
+      const response = await endSupportSession(apiBaseUrl, token);
+      storeToken(response.token);
+      const session = await fetchMe(apiBaseUrl, response.token);
+      setMe(session);
+      router.replace(getLandingPathForSession(session));
+    } catch (actionError) {
+      const message = handleApiError(actionError, 'Unable to end the active support session.');
+      setError(message);
+    }
   }
 
   function handleApiError(actionError: unknown, fallbackMessage: string) {
@@ -478,8 +510,8 @@ export function AdminDashboard() {
     setCreateSuccess(null);
 
     try {
-      const payload = {
-        tenantSlug: me?.user.role === 'platform_admin' ? createForm.tenantSlug : undefined,
+        const payload = {
+        tenantSlug: canUsePlatformControls ? createForm.tenantSlug : undefined,
         organizationId: createForm.role === 'platform_admin' ? undefined : createForm.organizationId,
         fullName: createForm.fullName.trim(),
         email: createForm.email.trim().toLowerCase(),
@@ -675,7 +707,13 @@ export function AdminDashboard() {
   }
 
   return (
-    <RoleShell role={getDisplayRoleForShell(me?.user.role ?? 'org_admin')} title="Administration">
+    <RoleShell
+      role="org_admin"
+      title={isSupportView ? 'Support View' : 'Administration'}
+      session={me}
+      onLogout={handleLogout}
+      onEndSupport={handleEndSupport}
+    >
       <div className="adminStack">
         <section className="card consumerHero adminHero">
           <div className="consumerHeroTop">
@@ -883,7 +921,7 @@ export function AdminDashboard() {
           </article>
         </section>
 
-        {me?.user.role === 'platform_admin' && dashboard?.resetSystemEnabled ? (
+        {canUsePlatformControls && dashboard?.resetSystemEnabled ? (
           <section className="adminPanelGrid">
             <article className="card">
               <div className="sectionHeaderRow">
@@ -897,7 +935,7 @@ export function AdminDashboard() {
               </div>
               <div className="listItemCard" style={{ marginTop: 16 }}>
                 <strong>What stays</strong>
-                <span className="muted">{me.user.email} and the minimum tenant/login records needed to keep admin access working.</span>
+                <span className="muted">{me?.user.email ?? 'The current admin account'} and the minimum tenant/login records needed to keep admin access working.</span>
               </div>
               <div className="listItemCard" style={{ marginTop: 12 }}>
                 <strong>What gets wiped</strong>
@@ -1035,7 +1073,7 @@ export function AdminDashboard() {
               <h2 className="sectionTitle">Create beta user</h2>
               <p className="muted">Provision a beta account directly from the product UI. Passwords are set server-side and never returned.</p>
               <form onSubmit={handleCreateUser} className="consumerStack" style={{ gap: 16, marginTop: 16 }}>
-                {me?.user.role === 'platform_admin' ? (
+                {canUsePlatformControls ? (
                   <label className="fieldLabel">
                     Tenant
                     <select
@@ -1071,7 +1109,7 @@ export function AdminDashboard() {
                   <label className="fieldLabel">
                     Role
                     <select className="inputField" value={createForm.role} onChange={(event) => setCreateForm((current) => ({ ...current, role: event.target.value }))}>
-                      {dashboard?.assignableRoles.map((role) => (
+                      {assignableRoles.map((role) => (
                         <option key={role} value={role}>
                           {formatRoleLabel(role)}
                         </option>
@@ -1129,7 +1167,7 @@ export function AdminDashboard() {
                       <label className="fieldLabel">
                         Role
                         <select className="inputField" value={editForm.role} onChange={(event) => setEditForm((current) => ({ ...current, role: event.target.value }))}>
-                          {dashboard?.assignableRoles.map((role) => (
+                          {assignableRoles.map((role) => (
                             <option key={role} value={role}>
                               {formatRoleLabel(role)}
                             </option>

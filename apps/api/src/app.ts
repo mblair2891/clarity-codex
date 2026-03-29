@@ -10,6 +10,7 @@ import { consumerRoutes } from './routes/consumer.js';
 import { clinicalRoutes } from './routes/clinical.js';
 import { rcmRoutes } from './routes/rcm.js';
 import { aiRoutes } from './routes/ai.js';
+import { platformRoutes } from './routes/platform.js';
 import { AuditService } from './services/audit.service.js';
 
 function isAllowedCorsOrigin(origin: string) {
@@ -69,6 +70,7 @@ export function buildApp() {
   app.register(healthRoutes);
   app.register(authRoutes);
   app.register(metaRoutes);
+  app.register(platformRoutes);
   app.register(adminRoutes);
   app.register(consumerRoutes);
   app.register(clinicalRoutes);

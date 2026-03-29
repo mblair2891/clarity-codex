@@ -291,6 +291,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const { access, currentUser, isPlatformAdmin } = await requireAdminContext(app, request);
     requireRoutePermission(request, permissions.orgUsersRead);
     const activeOrganizationId = requireActiveOrganization(access);
+    const canUsePlatformControls = isPlatformAdmin && !access.supportMode && !access.activeOrganizationId;
 
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
@@ -367,7 +368,7 @@ export async function adminRoutes(app: FastifyInstance) {
           }
         }
       }),
-      isPlatformAdmin
+      canUsePlatformControls
         ? prisma.tenant.findMany({
             orderBy: { createdAt: 'asc' },
             include: {
@@ -457,7 +458,7 @@ export async function adminRoutes(app: FastifyInstance) {
         }
       }),
       prisma.auditLog.findMany({
-        where: isPlatformAdmin
+        where: canUsePlatformControls
           ? {}
           : {
               tenantId: access.tenantId
@@ -616,7 +617,7 @@ export async function adminRoutes(app: FastifyInstance) {
         role: currentUser.role,
         mustChangePassword: currentUser.mustChangePassword
       },
-      scopeModel: isPlatformAdmin ? 'platform_wide' : 'organization_membership',
+      scopeModel: canUsePlatformControls ? 'platform_wide' : 'organization_membership',
       primaryOrganization: primaryMembership?.organization
         ? {
             id: primaryMembership.organization.id,
@@ -650,7 +651,7 @@ export async function adminRoutes(app: FastifyInstance) {
         { id: 'create-user', label: 'Create beta account', description: 'Provision a staff, admin, or consumer login.' },
         { id: 'review-follow-ups', label: 'Review flagged follow-ups', description: 'Jump into the current attention queue.' },
         { id: 'manage-orgs', label: 'Update organization details', description: 'Keep org names and identifiers current.' },
-        ...(isPlatformAdmin && ResetSystemService.isEnabled()
+        ...(canUsePlatformControls && ResetSystemService.isEnabled()
           ? [
               {
                 id: 'reset-system',
@@ -660,7 +661,7 @@ export async function adminRoutes(app: FastifyInstance) {
             ]
           : [])
       ],
-      resetSystemEnabled: isPlatformAdmin && ResetSystemService.isEnabled(),
+      resetSystemEnabled: canUsePlatformControls && ResetSystemService.isEnabled(),
       resetSystemEnvironment: env.APP_ENV,
       organizations: organizations.map((organization) => {
         const scopedUsers = users.filter((user) => user.memberships.some((membership) => membership.organizationId === organization.id));
