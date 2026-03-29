@@ -357,7 +357,7 @@ export async function loginWithBetaAccessCode(apiBaseUrl: string, email: string,
 }
 
 export async function resetSystemData(apiBaseUrl: string, token: string, confirmationText: string) {
-  return apiFetch<ResetSystemResponse>(apiBaseUrl, '/v1/admin/reset-system', {
+  return apiFetch<ResetSystemResponse>(apiBaseUrl, '/v1/platform/system/reset', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

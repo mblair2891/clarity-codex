@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { env } from '../config/env.js';
+import type { AccessContext } from '../lib/access/types.js';
 import { prisma } from '../lib/db.js';
 
 type RecordCountSummary = Record<string, number>;
@@ -219,7 +220,12 @@ export class ResetSystemService {
     return isResetSystemEnvironmentEnabled();
   }
 
-  async resetSystem(actorUserId: string): Promise<ResetSystemResult> {
+  async resetSystem(
+    actor: Pick<
+      AccessContext,
+      'userId' | 'tenantId' | 'sessionId' | 'supportMode' | 'supportAccessSessionId' | 'activeOrganizationId'
+    >
+  ): Promise<ResetSystemResult> {
     if (!isResetSystemEnvironmentEnabled()) {
       const error = new Error('System reset is only enabled in the beta environment.') as Error & { statusCode?: number };
       error.statusCode = 403;
@@ -227,13 +233,19 @@ export class ResetSystemService {
     }
 
     const preservedUser = await prisma.user.findUnique({
-      where: { id: actorUserId },
+      where: { id: actor.userId },
       include: {
-        tenant: true
+        tenant: true,
+        platformRoles: true
       }
     });
 
-    if (!preservedUser || preservedUser.role !== 'platform_admin') {
+    const hasPlatformAdminAuthority = Boolean(
+      preservedUser
+      && (preservedUser.role === 'platform_admin' || preservedUser.platformRoles.some((platformRole) => platformRole.role === 'platform_admin'))
+    );
+
+    if (!preservedUser || !hasPlatformAdminAuthority) {
       const error = new Error('Only an active platform admin can reset the beta system.') as Error & { statusCode?: number };
       error.statusCode = 403;
       throw error;
@@ -826,10 +838,15 @@ export class ResetSystemService {
       data: {
         tenantId: preservedUser.tenantId,
         userId: preservedUser.id,
-        action: 'admin.system.reset',
-        entityType: 'system',
+        sessionId: actor.sessionId,
+        supportAccessSessionId: actor.supportAccessSessionId,
+        supportMode: actor.supportMode,
+        action: 'platform.system.reset',
+        entityType: 'platform',
         entityId: preservedUser.tenantId,
         metadata: {
+          platformContext: 'control_plane',
+          activeOrganizationId: actor.activeOrganizationId,
           preservedUserId: preservedUser.id,
           deleted
         }
