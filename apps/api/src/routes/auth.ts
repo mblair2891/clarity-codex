@@ -415,6 +415,10 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(404).send({ message: 'Organization was not found.' });
     }
 
+    if (organization.tenantId !== access.tenantId) {
+      return reply.code(403).send({ message: 'Support access is limited to organizations in your tenant.' });
+    }
+
     if (payload.locationId && (!location || location.organizationId !== organization.id)) {
       return reply.code(404).send({ message: 'Location was not found in the requested organization.' });
     }
