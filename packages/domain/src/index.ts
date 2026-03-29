@@ -32,6 +32,24 @@ export const navigation: NavigationItem[] = [
     description: 'Scoped support-session launcher and support access history.'
   },
   {
+    title: 'Plans',
+    href: '/platform/plans',
+    roles: ['platform_admin'],
+    description: 'Subscription plans, pricing defaults, and included module bundles.'
+  },
+  {
+    title: 'Subscriptions',
+    href: '/platform/subscriptions',
+    roles: ['platform_admin'],
+    description: 'Assign plans, monitor statuses, and manage organization pricing records.'
+  },
+  {
+    title: 'Features',
+    href: '/platform/features',
+    roles: ['platform_admin'],
+    description: 'Feature catalog and entitlement flags for platform-managed modules.'
+  },
+  {
     title: 'Platform Settings',
     href: '/platform/settings',
     roles: ['platform_admin'],
