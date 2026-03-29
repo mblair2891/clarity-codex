@@ -30,6 +30,13 @@ export function formatDateTime(value: string) {
   }).format(new Date(value));
 }
 
+export function formatMoney(amountCents: number, currency = 'usd') {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: currency.toUpperCase()
+  }).format(amountCents / 100);
+}
+
 export function formatRoleLabel(value: string) {
   return value.replaceAll('_', ' ');
 }

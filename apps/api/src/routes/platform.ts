@@ -1,7 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { hasPlatformRole, requirePlatformRole } from '../lib/access/org-scope.js';
+import { requirePlatformRole } from '../lib/access/org-scope.js';
 import { permissions } from '../lib/access/permissions.js';
+import {
+  buildSubscriptionScaffold,
+  resolveEffectiveFeatures,
+  serializeFeature,
+  serializePlan,
+  serializeSubscription,
+  serializeSubscriptionSummary
+} from '../lib/platform-subscriptions.js';
 import { requireRoutePermission } from '../lib/access/route-permissions.js';
 import { prisma } from '../lib/db.js';
 import { ResetSystemService } from '../services/reset-system.service.js';
@@ -26,21 +34,44 @@ const resetSystemSchema = z.object({
   confirmationText: z.string().trim().min(1)
 });
 
+const subscriptionStatusSchema = z.enum(['draft', 'trialing', 'active', 'past_due', 'suspended', 'canceled']);
+
+const subscriptionMutationSchema = z.object({
+  planId: z.string().min(1).nullable().optional(),
+  status: subscriptionStatusSchema,
+  billingStatus: z.string().trim().min(1).max(40),
+  basePriceCents: z.number().int().min(0),
+  activeClientPriceCents: z.number().int().min(0),
+  clinicianPriceCents: z.number().int().min(0),
+  currency: z.string().trim().min(3).max(8).default('usd'),
+  billingInterval: z.string().trim().min(1).max(20).default('month'),
+  startsAt: z.string().datetime().optional(),
+  trialEndsAt: z.string().datetime().nullable().optional(),
+  currentPeriodStart: z.string().datetime().nullable().optional(),
+  currentPeriodEnd: z.string().datetime().nullable().optional(),
+  canceledAt: z.string().datetime().nullable().optional(),
+  billingProvider: z.string().trim().max(40).nullable().optional(),
+  billingCustomerId: z.string().trim().max(191).nullable().optional(),
+  notes: z.string().trim().max(2_000).nullable().optional()
+});
+
+const subscriptionPatchSchema = subscriptionMutationSchema.partial();
+
+const featureOverridesPatchSchema = z.object({
+  overrides: z.array(
+    z.object({
+      featureId: z.string().min(1),
+      enabled: z.boolean(),
+      reason: z.string().trim().max(500).nullable().optional()
+    })
+  ).min(1)
+});
+
 type LoadedOrganization = Awaited<ReturnType<typeof loadOrganizations>>[number];
 
 function normalizeOptionalString(value?: string | null) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
-}
-
-function buildSubscriptionScaffold() {
-  return {
-    planName: 'Beta',
-    subscriptionStatus: 'not_configured',
-    billingStatus: 'scaffolding',
-    billingCustomerId: null,
-    nextInvoiceDate: null
-  };
 }
 
 function resolveSupportSessionStatus(session: {
@@ -61,6 +92,24 @@ function resolveSupportSessionStatus(session: {
   }
 
   return 'active';
+}
+
+function requirePlatformControlPlaneAccess(access: ReturnType<typeof requireRoutePermission>) {
+  requirePlatformRole(access, 'platform_admin');
+
+  if (access.supportMode || access.activeOrganizationId) {
+    const error = new Error(
+      'This action is only available from the platform control plane, not support mode or organization-scoped access.'
+    ) as Error & { statusCode?: number };
+    error.statusCode = 403;
+    throw error;
+  }
+
+  return access;
+}
+
+function parseOptionalDate(value?: string | null) {
+  return value ? new Date(value) : null;
 }
 
 async function loadOrganizations(tenantId: string) {
@@ -88,6 +137,17 @@ async function loadOrganizations(tenantId: string) {
       locations: {
         orderBy: {
           createdAt: 'asc'
+        }
+      },
+      subscription: {
+        include: {
+          plan: {
+            select: {
+              id: true,
+              key: true,
+              name: true
+            }
+          }
         }
       },
       _count: {
@@ -253,7 +313,7 @@ function serializeOrganizationSummary(
       clinicalNotes: organization._count.clinicalNotes,
       unresolvedReviews: organization._count.checkInReviews
     },
-    subscription: buildSubscriptionScaffold(),
+    subscription: serializeSubscriptionSummary(organization.subscription),
     locations: organization.locations.map((location) => ({
       id: location.id,
       name: location.name,
@@ -270,7 +330,7 @@ export async function platformRoutes(app: FastifyInstance) {
     await app.authenticateRequest(request);
     const access = requireRoutePermission(request, permissions.platformOrganizationsRead);
 
-    const [tenant, organizations, platformUsers, totalOrgUsers, totalConsumers] = await Promise.all([
+    const [tenant, organizations, platformUsers, totalOrgUsers, totalConsumers, plans] = await Promise.all([
       prisma.tenant.findUnique({
         where: { id: access.tenantId }
       }),
@@ -292,6 +352,27 @@ export async function platformRoutes(app: FastifyInstance) {
         where: {
           tenantId: access.tenantId
         }
+      }),
+      prisma.subscriptionPlan.findMany({
+        where: {
+          tenantId: access.tenantId
+        },
+        include: {
+          planFeatures: {
+            where: {
+              included: true
+            },
+            include: {
+              feature: true
+            }
+          },
+          _count: {
+            select: {
+              organizationSubscriptions: true
+            }
+          }
+        },
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
       })
     ]);
 
@@ -306,6 +387,11 @@ export async function platformRoutes(app: FastifyInstance) {
     const organizationSummaries = organizations.map((organization) =>
       serializeOrganizationSummary(organization, activeSupportSessionsByOrganization)
     );
+    const subscriptionsByStatus = organizationSummaries.reduce<Record<string, number>>((accumulator, organization) => {
+      const status = organization.subscription.subscriptionStatus;
+      accumulator[status] = (accumulator[status] ?? 0) + 1;
+      return accumulator;
+    }, {});
 
     return {
       tenant: tenant
@@ -326,28 +412,22 @@ export async function platformRoutes(app: FastifyInstance) {
         totalConsumers,
         activeSupportSessions: supportSessions.active.length,
         recentSupportSessions: supportSessions.recent.length,
-        subscriptionsByStatus: [
-          {
-            status: 'not_configured',
-            count: organizationSummaries.length
-          }
-        ]
+        subscriptionsByStatus: Object.entries(subscriptionsByStatus).map(([status, count]) => ({
+          status,
+          count
+        }))
       },
       billing: {
-        isConfigured: false,
-        plans: [
-          {
-            name: 'Beta',
-            organizationCount: organizationSummaries.length
-          }
-        ],
-        subscriptionsByStatus: [
-          {
-            status: 'not_configured',
-            count: organizationSummaries.length
-          }
-        ],
-        note: 'Billing, plans, and subscription lifecycle controls are scaffolded for beta but not wired to a payment processor yet.'
+        isConfigured: organizationSummaries.some((organization) => organization.subscription.subscriptionStatus !== 'not_configured'),
+        plans: plans.map((plan) => ({
+          name: plan.name,
+          organizationCount: plan._count.organizationSubscriptions
+        })),
+        subscriptionsByStatus: Object.entries(subscriptionsByStatus).map(([status, count]) => ({
+          status,
+          count
+        })),
+        note: 'Billing automation is still scaffolded, but plans, feature entitlements, and organization subscription records now live in the platform control plane.'
       },
       organizations: organizationSummaries,
       platformUsers: platformUsers.map(serializePlatformUser).slice(0, 8),
@@ -472,6 +552,17 @@ export async function platformRoutes(app: FastifyInstance) {
             createdAt: 'asc'
           }
         },
+        subscription: {
+          include: {
+            plan: {
+              select: {
+                id: true,
+                key: true,
+                name: true
+              }
+            }
+          }
+        },
         _count: {
           select: {
             consumers: true,
@@ -523,7 +614,7 @@ export async function platformRoutes(app: FastifyInstance) {
           appointments: organization._count.appointments,
           encounters: organization._count.encounters
         },
-        subscription: buildSubscriptionScaffold(),
+        subscription: serializeSubscriptionSummary(organization.subscription),
         locations: organization.locations.map((location) => ({
           id: location.id,
           name: location.name,
@@ -546,6 +637,519 @@ export async function platformRoutes(app: FastifyInstance) {
         status: 'active',
         note: 'Organization lifecycle controls are scaffolded for beta. Provisioning, suspension, and archival workflows can land here next.'
       }
+    };
+  });
+
+  app.get('/v1/platform/plans', async (request) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsRead));
+
+    const plans = await prisma.subscriptionPlan.findMany({
+      where: {
+        tenantId: access.tenantId
+      },
+      include: {
+        planFeatures: {
+          where: {
+            included: true
+          },
+          include: {
+            feature: true
+          }
+        },
+        _count: {
+          select: {
+            organizationSubscriptions: true
+          }
+        }
+      },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
+    });
+
+    return {
+      plans: plans.map(serializePlan)
+    };
+  });
+
+  app.get('/v1/platform/features', async (request) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsRead));
+
+    const features = await prisma.platformFeature.findMany({
+      where: {
+        tenantId: access.tenantId
+      },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
+    });
+
+    return {
+      features: features.map(serializeFeature)
+    };
+  });
+
+  app.get('/v1/platform/subscriptions', async (request) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsRead));
+
+    const organizations = await prisma.organization.findMany({
+      where: {
+        tenantId: access.tenantId
+      },
+      include: {
+        subscription: {
+          include: {
+            plan: {
+              select: {
+                id: true,
+                key: true,
+                name: true
+              }
+            }
+          }
+        },
+        _count: {
+          select: {
+            consumers: true,
+            memberships: true,
+            locations: true
+          }
+        }
+      },
+      orderBy: [{ createdAt: 'asc' }]
+    });
+
+    return {
+      subscriptions: organizations.map((organization) => ({
+        organization: {
+          id: organization.id,
+          name: organization.name,
+          slug: organization.slug,
+          createdAt: organization.createdAt.toISOString(),
+          counts: {
+            consumers: organization._count.consumers,
+            memberships: organization._count.memberships,
+            locations: organization._count.locations
+          }
+        },
+        subscription: serializeSubscriptionSummary(organization.subscription)
+      }))
+    };
+  });
+
+  app.get('/v1/platform/organizations/:organizationId/subscription', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsRead));
+    const params = organizationParamsSchema.parse(request.params);
+
+    const organization = await prisma.organization.findFirst({
+      where: {
+        id: params.organizationId,
+        tenantId: access.tenantId
+      },
+      include: {
+        subscription: {
+          include: {
+            plan: {
+              select: {
+                id: true,
+                key: true,
+                name: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!organization) {
+      return reply.code(404).send({ message: 'Organization was not found.' });
+    }
+
+    return {
+      organization: {
+        id: organization.id,
+        name: organization.name,
+        slug: organization.slug
+      },
+      subscription: serializeSubscriptionSummary(organization.subscription)
+    };
+  });
+
+  app.post('/v1/platform/organizations/:organizationId/subscription', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+    const params = organizationParamsSchema.parse(request.params);
+    const payload = subscriptionMutationSchema.parse(request.body);
+
+    const [organization, existingSubscription, plan] = await Promise.all([
+      prisma.organization.findFirst({
+        where: {
+          id: params.organizationId,
+          tenantId: access.tenantId
+        }
+      }),
+      prisma.organizationSubscription.findFirst({
+        where: {
+          tenantId: access.tenantId,
+          organizationId: params.organizationId
+        }
+      }),
+      payload.planId
+        ? prisma.subscriptionPlan.findFirst({
+            where: {
+              id: payload.planId,
+              tenantId: access.tenantId
+            }
+          })
+        : Promise.resolve(null)
+    ]);
+
+    if (!organization) {
+      return reply.code(404).send({ message: 'Organization was not found.' });
+    }
+
+    if (existingSubscription) {
+      return reply.code(409).send({ message: 'A subscription already exists for this organization.' });
+    }
+
+    if (payload.planId && !plan) {
+      return reply.code(404).send({ message: 'Subscription plan was not found.' });
+    }
+
+    const createdSubscription = await prisma.$transaction(async (transaction) => {
+      const subscription = await transaction.organizationSubscription.create({
+        data: {
+          tenantId: access.tenantId,
+          organizationId: organization.id,
+          planId: plan?.id ?? null,
+          status: payload.status,
+          billingStatus: payload.billingStatus,
+          basePriceCents: payload.basePriceCents,
+          activeClientPriceCents: payload.activeClientPriceCents,
+          clinicianPriceCents: payload.clinicianPriceCents,
+          currency: payload.currency.toLowerCase(),
+          billingInterval: payload.billingInterval,
+          startsAt: parseOptionalDate(payload.startsAt) ?? new Date(),
+          trialEndsAt: parseOptionalDate(payload.trialEndsAt),
+          currentPeriodStart: parseOptionalDate(payload.currentPeriodStart),
+          currentPeriodEnd: parseOptionalDate(payload.currentPeriodEnd),
+          canceledAt: parseOptionalDate(payload.canceledAt),
+          billingProvider: normalizeOptionalString(payload.billingProvider),
+          billingCustomerId: normalizeOptionalString(payload.billingCustomerId),
+          notes: normalizeOptionalString(payload.notes)
+        },
+        include: {
+          plan: {
+            select: {
+              id: true,
+              key: true,
+              name: true
+            }
+          }
+        }
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          tenantId: access.tenantId,
+          userId: access.userId,
+          organizationId: organization.id,
+          action: 'platform.subscription.created',
+          entityType: 'organization_subscription',
+          entityId: subscription.id,
+          metadata: {
+            planId: subscription.planId,
+            status: subscription.status,
+            billingStatus: subscription.billingStatus
+          }
+        }
+      });
+
+      return subscription;
+    });
+
+    return reply.code(201).send({
+      created: true,
+      organization: {
+        id: organization.id,
+        name: organization.name,
+        slug: organization.slug
+      },
+      subscription: serializeSubscription(createdSubscription)
+    });
+  });
+
+  app.patch('/v1/platform/organizations/:organizationId/subscription', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+    const params = organizationParamsSchema.parse(request.params);
+    const payload = subscriptionPatchSchema.parse(request.body);
+
+    const [organization, currentSubscription] = await Promise.all([
+      prisma.organization.findFirst({
+        where: {
+          id: params.organizationId,
+          tenantId: access.tenantId
+        }
+      }),
+      prisma.organizationSubscription.findFirst({
+        where: {
+          tenantId: access.tenantId,
+          organizationId: params.organizationId
+        },
+        include: {
+          plan: true
+        }
+      })
+    ]);
+
+    if (!organization) {
+      return reply.code(404).send({ message: 'Organization was not found.' });
+    }
+
+    if (!currentSubscription) {
+      return reply.code(404).send({ message: 'Organization subscription was not found.' });
+    }
+
+    const plan = payload.planId === undefined
+      ? currentSubscription.plan
+      : payload.planId
+        ? await prisma.subscriptionPlan.findFirst({
+            where: {
+              id: payload.planId,
+              tenantId: access.tenantId
+            }
+          })
+        : null;
+
+    if (payload.planId && !plan) {
+      return reply.code(404).send({ message: 'Subscription plan was not found.' });
+    }
+
+    const updatedSubscription = await prisma.$transaction(async (transaction) => {
+      const subscription = await transaction.organizationSubscription.update({
+        where: {
+          id: currentSubscription.id
+        },
+        data: {
+          planId: payload.planId === undefined ? currentSubscription.planId : plan?.id ?? null,
+          status: payload.status ?? currentSubscription.status,
+          billingStatus: payload.billingStatus ?? currentSubscription.billingStatus,
+          basePriceCents:
+            payload.basePriceCents
+            ?? (payload.planId !== undefined && plan ? plan.basePriceCents : currentSubscription.basePriceCents),
+          activeClientPriceCents:
+            payload.activeClientPriceCents
+            ?? (payload.planId !== undefined && plan ? plan.activeClientPriceCents : currentSubscription.activeClientPriceCents),
+          clinicianPriceCents:
+            payload.clinicianPriceCents
+            ?? (payload.planId !== undefined && plan ? plan.clinicianPriceCents : currentSubscription.clinicianPriceCents),
+          currency: payload.currency?.toLowerCase() ?? currentSubscription.currency,
+          billingInterval: payload.billingInterval ?? currentSubscription.billingInterval,
+          startsAt: payload.startsAt ? new Date(payload.startsAt) : currentSubscription.startsAt,
+          trialEndsAt: payload.trialEndsAt === undefined ? currentSubscription.trialEndsAt : parseOptionalDate(payload.trialEndsAt),
+          currentPeriodStart:
+            payload.currentPeriodStart === undefined
+              ? currentSubscription.currentPeriodStart
+              : parseOptionalDate(payload.currentPeriodStart),
+          currentPeriodEnd:
+            payload.currentPeriodEnd === undefined
+              ? currentSubscription.currentPeriodEnd
+              : parseOptionalDate(payload.currentPeriodEnd),
+          canceledAt: payload.canceledAt === undefined ? currentSubscription.canceledAt : parseOptionalDate(payload.canceledAt),
+          billingProvider:
+            payload.billingProvider === undefined
+              ? currentSubscription.billingProvider
+              : normalizeOptionalString(payload.billingProvider),
+          billingCustomerId:
+            payload.billingCustomerId === undefined
+              ? currentSubscription.billingCustomerId
+              : normalizeOptionalString(payload.billingCustomerId),
+          notes: payload.notes === undefined ? currentSubscription.notes : normalizeOptionalString(payload.notes)
+        },
+        include: {
+          plan: {
+            select: {
+              id: true,
+              key: true,
+              name: true
+            }
+          }
+        }
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          tenantId: access.tenantId,
+          userId: access.userId,
+          organizationId: organization.id,
+          action: 'platform.subscription.updated',
+          entityType: 'organization_subscription',
+          entityId: subscription.id,
+          metadata: {
+            planId: subscription.planId,
+            status: subscription.status,
+            billingStatus: subscription.billingStatus
+          }
+        }
+      });
+
+      return subscription;
+    });
+
+    return {
+      updated: true,
+      organization: {
+        id: organization.id,
+        name: organization.name,
+        slug: organization.slug
+      },
+      subscription: serializeSubscription(updatedSubscription)
+    };
+  });
+
+  app.get('/v1/platform/organizations/:organizationId/features', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsRead));
+    const params = organizationParamsSchema.parse(request.params);
+
+    const organization = await prisma.organization.findFirst({
+      where: {
+        id: params.organizationId,
+        tenantId: access.tenantId
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true
+      }
+    });
+
+    if (!organization) {
+      return reply.code(404).send({ message: 'Organization was not found.' });
+    }
+
+    const resolved = await resolveEffectiveFeatures(prisma, {
+      tenantId: access.tenantId,
+      organizationId: organization.id
+    });
+
+    return {
+      organization,
+      subscription: resolved.subscription,
+      features: resolved.features
+    };
+  });
+
+  app.patch('/v1/platform/organizations/:organizationId/features', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+    const params = organizationParamsSchema.parse(request.params);
+    const payload = featureOverridesPatchSchema.parse(request.body);
+
+    const organization = await prisma.organization.findFirst({
+      where: {
+        id: params.organizationId,
+        tenantId: access.tenantId
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true
+      }
+    });
+
+    if (!organization) {
+      return reply.code(404).send({ message: 'Organization was not found.' });
+    }
+
+    const features = await prisma.platformFeature.findMany({
+      where: {
+        tenantId: access.tenantId,
+        id: {
+          in: payload.overrides.map((override) => override.featureId)
+        }
+      }
+    });
+    const featureIdSet = new Set(features.map((feature) => feature.id));
+
+    if (payload.overrides.some((override) => !featureIdSet.has(override.featureId))) {
+      return reply.code(404).send({ message: 'One or more features were not found.' });
+    }
+
+    const resolvedBeforeUpdate = await resolveEffectiveFeatures(prisma, {
+      tenantId: access.tenantId,
+      organizationId: organization.id
+    });
+    const featureStateById = new Map(resolvedBeforeUpdate.features.map((feature) => [feature.id, feature]));
+
+    await prisma.$transaction(async (transaction) => {
+      for (const override of payload.overrides) {
+        const currentFeature = featureStateById.get(override.featureId);
+
+        if (!currentFeature) {
+          continue;
+        }
+
+        if (override.enabled === currentFeature.includedInPlan) {
+          await transaction.organizationFeatureOverride.deleteMany({
+            where: {
+              organizationId: organization.id,
+              featureId: override.featureId
+            }
+          });
+          continue;
+        }
+
+        await transaction.organizationFeatureOverride.upsert({
+          where: {
+            organizationId_featureId: {
+              organizationId: organization.id,
+              featureId: override.featureId
+            }
+          },
+          update: {
+            enabled: override.enabled,
+            reason: normalizeOptionalString(override.reason),
+            updatedByUserId: access.userId
+          },
+          create: {
+            tenantId: access.tenantId,
+            organizationId: organization.id,
+            featureId: override.featureId,
+            enabled: override.enabled,
+            reason: normalizeOptionalString(override.reason),
+            createdByUserId: access.userId,
+            updatedByUserId: access.userId
+          }
+        });
+      }
+
+      await transaction.auditLog.create({
+        data: {
+          tenantId: access.tenantId,
+          userId: access.userId,
+          organizationId: organization.id,
+          action: 'platform.organization_feature_override.updated',
+          entityType: 'organization_feature_override',
+          entityId: organization.id,
+          metadata: {
+            overrides: payload.overrides
+          }
+        }
+      });
+    });
+
+    const resolved = await resolveEffectiveFeatures(prisma, {
+      tenantId: access.tenantId,
+      organizationId: organization.id
+    });
+
+    return {
+      updated: true,
+      organization,
+      subscription: resolved.subscription,
+      features: resolved.features
     };
   });
 

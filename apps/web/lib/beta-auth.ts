@@ -97,11 +97,75 @@ export type ResetSystemResponse = {
 };
 
 export type PlatformSubscriptionScaffold = {
+  id: string | null;
+  planId: string | null;
+  planKey: string | null;
   planName: string | null;
   subscriptionStatus: string;
   billingStatus: string;
   billingCustomerId: string | null;
+  billingProvider: string | null;
+  basePriceCents: number;
+  activeClientPriceCents: number;
+  clinicianPriceCents: number;
+  currency: string;
+  billingInterval: string;
+  startsAt: string | null;
+  trialEndsAt: string | null;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+  canceledAt: string | null;
   nextInvoiceDate: string | null;
+  notes: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type PlatformPlan = {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  isActive: boolean;
+  sortOrder: number;
+  pricing: {
+    basePriceCents: number;
+    activeClientPriceCents: number;
+    clinicianPriceCents: number;
+    currency: string;
+    billingInterval: string;
+  };
+  includedFeatures: PlatformFeature[];
+  organizationCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PlatformFeature = {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PlatformOrganizationFeature = PlatformFeature & {
+  enabled: boolean;
+  includedInPlan: boolean;
+  source: 'plan' | 'override' | 'none';
+  override: {
+    id: string;
+    enabled: boolean;
+    reason: string | null;
+    createdByUserId: string | null;
+    updatedByUserId: string | null;
+    createdAt: string;
+    updatedAt: string;
+  } | null;
 };
 
 export type PlatformOrganizationSummary = {
@@ -199,6 +263,31 @@ export type PlatformOrganizationsResponse = {
   organizations: PlatformOrganizationSummary[];
 };
 
+export type PlatformPlansResponse = {
+  plans: PlatformPlan[];
+};
+
+export type PlatformFeaturesResponse = {
+  features: PlatformFeature[];
+};
+
+export type PlatformSubscriptionsResponse = {
+  subscriptions: Array<{
+    organization: {
+      id: string;
+      name: string;
+      slug: string | null;
+      createdAt: string;
+      counts: {
+        consumers: number;
+        memberships: number;
+        locations: number;
+      };
+    };
+    subscription: PlatformSubscriptionScaffold;
+  }>;
+};
+
 export type PlatformOrganizationDetailResponse = {
   organization: PlatformOrganizationSummary & {
     orgAdmins: Array<{
@@ -221,6 +310,65 @@ export type PlatformOrganizationDetailResponse = {
     status: string;
     note: string;
   };
+};
+
+export type PlatformOrganizationSubscriptionResponse = {
+  organization: {
+    id: string;
+    name: string;
+    slug: string | null;
+  };
+  subscription: PlatformSubscriptionScaffold;
+};
+
+export type UpsertPlatformOrganizationSubscriptionInput = {
+  planId?: string | null;
+  status: string;
+  billingStatus: string;
+  basePriceCents: number;
+  activeClientPriceCents: number;
+  clinicianPriceCents: number;
+  currency: string;
+  billingInterval: string;
+  startsAt?: string;
+  trialEndsAt?: string | null;
+  currentPeriodStart?: string | null;
+  currentPeriodEnd?: string | null;
+  canceledAt?: string | null;
+  billingProvider?: string | null;
+  billingCustomerId?: string | null;
+  notes?: string | null;
+};
+
+export type PatchPlatformOrganizationSubscriptionInput = Partial<UpsertPlatformOrganizationSubscriptionInput>;
+
+export type UpsertPlatformOrganizationSubscriptionResponse = {
+  created?: true;
+  updated?: true;
+  organization: {
+    id: string;
+    name: string;
+    slug: string | null;
+  };
+  subscription: PlatformSubscriptionScaffold;
+};
+
+export type PlatformOrganizationFeaturesResponse = {
+  organization: {
+    id: string;
+    name: string;
+    slug: string | null;
+  };
+  subscription: PlatformSubscriptionScaffold;
+  features: PlatformOrganizationFeature[];
+};
+
+export type PatchPlatformOrganizationFeaturesInput = {
+  overrides: Array<{
+    featureId: string;
+    enabled: boolean;
+    reason?: string | null;
+  }>;
 };
 
 export type PlatformSupportSessionsResponse = {
@@ -385,12 +533,120 @@ export async function fetchPlatformOrganizations(apiBaseUrl: string, token: stri
   });
 }
 
+export async function fetchPlatformPlans(apiBaseUrl: string, token: string) {
+  return apiFetch<PlatformPlansResponse>(apiBaseUrl, '/v1/platform/plans', {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+}
+
+export async function fetchPlatformFeatures(apiBaseUrl: string, token: string) {
+  return apiFetch<PlatformFeaturesResponse>(apiBaseUrl, '/v1/platform/features', {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+}
+
+export async function fetchPlatformSubscriptions(apiBaseUrl: string, token: string) {
+  return apiFetch<PlatformSubscriptionsResponse>(apiBaseUrl, '/v1/platform/subscriptions', {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+}
+
 export async function fetchPlatformOrganizationDetail(apiBaseUrl: string, token: string, organizationId: string) {
   return apiFetch<PlatformOrganizationDetailResponse>(apiBaseUrl, `/v1/platform/organizations/${organizationId}`, {
     headers: {
       Authorization: `Bearer ${token}`
     }
   });
+}
+
+export async function fetchPlatformOrganizationSubscription(apiBaseUrl: string, token: string, organizationId: string) {
+  return apiFetch<PlatformOrganizationSubscriptionResponse>(
+    apiBaseUrl,
+    `/v1/platform/organizations/${organizationId}/subscription`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }
+  );
+}
+
+export async function createPlatformOrganizationSubscription(
+  apiBaseUrl: string,
+  token: string,
+  organizationId: string,
+  payload: UpsertPlatformOrganizationSubscriptionInput
+) {
+  return apiFetch<UpsertPlatformOrganizationSubscriptionResponse>(
+    apiBaseUrl,
+    `/v1/platform/organizations/${organizationId}/subscription`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function updatePlatformOrganizationSubscription(
+  apiBaseUrl: string,
+  token: string,
+  organizationId: string,
+  payload: PatchPlatformOrganizationSubscriptionInput
+) {
+  return apiFetch<UpsertPlatformOrganizationSubscriptionResponse>(
+    apiBaseUrl,
+    `/v1/platform/organizations/${organizationId}/subscription`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function fetchPlatformOrganizationFeatures(apiBaseUrl: string, token: string, organizationId: string) {
+  return apiFetch<PlatformOrganizationFeaturesResponse>(
+    apiBaseUrl,
+    `/v1/platform/organizations/${organizationId}/features`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }
+  );
+}
+
+export async function updatePlatformOrganizationFeatures(
+  apiBaseUrl: string,
+  token: string,
+  organizationId: string,
+  payload: PatchPlatformOrganizationFeaturesInput
+) {
+  return apiFetch<PlatformOrganizationFeaturesResponse>(
+    apiBaseUrl,
+    `/v1/platform/organizations/${organizationId}/features`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    }
+  );
 }
 
 export async function createPlatformOrganization(apiBaseUrl: string, token: string, payload: CreatePlatformOrganizationInput) {
@@ -478,6 +734,12 @@ export function sessionIsSupportMode(session: Pick<AuthMeResponse, 'accessContex
 
 export function sessionHasOrgContext(session: Pick<AuthMeResponse, 'accessContext'>) {
   return Boolean(session.accessContext.activeOrganizationId);
+}
+
+export function sessionCanManagePlatformBilling(session: Pick<AuthMeResponse, 'accessContext'>) {
+  return session.accessContext.platformRoles.includes('platform_admin')
+    && !session.accessContext.supportMode
+    && !session.accessContext.activeOrganizationId;
 }
 
 export function getLandingPathForSession(session: AuthMeResponse) {

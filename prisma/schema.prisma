@@ -70,6 +70,32 @@ enum BillingWorkItemStatus {
   follow_up_needed
 }
 
+enum SubscriptionStatus {
+  draft
+  trialing
+  active
+  past_due
+  suspended
+  canceled
+}
+
+enum OrganizationInvoiceStatus {
+  draft
+  open
+  paid
+  void
+  uncollectible
+}
+
+enum OrganizationInvoiceLineItemType {
+  base_plan
+  feature_add_on
+  usage_active_client
+  usage_clinician
+  adjustment
+  credit
+}
+
 enum AiActionType {
   recovery_coach
   journaling_assist
@@ -79,44 +105,223 @@ enum AiActionType {
 }
 
 model Tenant {
-  id               String            @id @default(cuid())
-  slug             String            @unique
-  name             String
-  createdAt        DateTime          @default(now())
-  organizations    Organization[]
-  users            User[]
-  consumers        Consumer[]
-  clinicalNotes    ClinicalNote[]
-  checkInReviews   CheckInReview[]
-  billingWorkItems BillingWorkItem[]
-  billingNotes     BillingNote[]
-  payers           Payer[]
-  promptRegistry   PromptRegistry[]
-  aiRuns           AiRun[]
-  auditLogs        AuditLog[]
+  id                           String                        @id @default(cuid())
+  slug                         String                        @unique
+  name                         String
+  createdAt                    DateTime                      @default(now())
+  organizations                Organization[]
+  subscriptionPlans            SubscriptionPlan[]
+  platformFeatures             PlatformFeature[]
+  organizationSubscriptions    OrganizationSubscription[]
+  organizationFeatureOverrides OrganizationFeatureOverride[]
+  organizationUsageSnapshots   OrganizationUsageSnapshot[]
+  organizationInvoices         OrganizationInvoice[]
+  users                        User[]
+  consumers                    Consumer[]
+  clinicalNotes                ClinicalNote[]
+  checkInReviews               CheckInReview[]
+  billingWorkItems             BillingWorkItem[]
+  billingNotes                 BillingNote[]
+  payers                       Payer[]
+  promptRegistry               PromptRegistry[]
+  aiRuns                       AiRun[]
+  auditLogs                    AuditLog[]
 }
 
 model Organization {
-  id               String            @id @default(cuid())
-  tenantId         String
-  tenant           Tenant            @relation(fields: [tenantId], references: [id])
-  name             String
-  slug             String?
-  npi              String?
-  taxId            String?
-  memberships      Membership[]
-  locations        Location[]
-  consumers        Consumer[]
-  clinicalNotes    ClinicalNote[]
-  checkInReviews   CheckInReview[]
-  billingWorkItems BillingWorkItem[]
-  billingNotes     BillingNote[]
-  appointments     Appointment[]
-  groups           GroupSession[]
-  encounters       Encounter[]
-  createdAt        DateTime          @default(now())
+  id                   String                        @id @default(cuid())
+  tenantId             String
+  tenant               Tenant                        @relation(fields: [tenantId], references: [id])
+  name                 String
+  slug                 String?
+  npi                  String?
+  taxId                String?
+  memberships          Membership[]
+  locations            Location[]
+  consumers            Consumer[]
+  clinicalNotes        ClinicalNote[]
+  checkInReviews       CheckInReview[]
+  billingWorkItems     BillingWorkItem[]
+  billingNotes         BillingNote[]
+  appointments         Appointment[]
+  groups               GroupSession[]
+  encounters           Encounter[]
+  subscription         OrganizationSubscription?
+  featureOverrides     OrganizationFeatureOverride[]
+  usageSnapshots       OrganizationUsageSnapshot[]
+  organizationInvoices OrganizationInvoice[]
+  createdAt            DateTime                      @default(now())
 
   @@unique([tenantId, slug])
+}
+
+model SubscriptionPlan {
+  id                        String                     @id @default(cuid())
+  tenantId                  String
+  tenant                    Tenant                     @relation(fields: [tenantId], references: [id])
+  key                       String
+  name                      String
+  description               String?
+  isActive                  Boolean                    @default(true)
+  sortOrder                 Int                        @default(0)
+  basePriceCents            Int                        @default(0)
+  activeClientPriceCents    Int                        @default(0)
+  clinicianPriceCents       Int                        @default(0)
+  currency                  String                     @default("usd")
+  billingInterval           String                     @default("month")
+  planFeatures              PlanFeature[]
+  organizationSubscriptions OrganizationSubscription[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+
+  @@unique([tenantId, key])
+  @@index([tenantId, isActive, sortOrder])
+}
+
+model PlatformFeature {
+  id                    String                        @id @default(cuid())
+  tenantId              String
+  tenant                Tenant                        @relation(fields: [tenantId], references: [id])
+  key                   String
+  name                  String
+  description           String?
+  category              String?
+  isActive              Boolean                       @default(true)
+  sortOrder             Int                           @default(0)
+  planFeatures          PlanFeature[]
+  organizationOverrides OrganizationFeatureOverride[]
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
+
+  @@unique([tenantId, key])
+  @@index([tenantId, isActive, sortOrder])
+}
+
+model PlanFeature {
+  id        String           @id @default(cuid())
+  planId    String
+  featureId String
+  included  Boolean          @default(true)
+  plan      SubscriptionPlan @relation(fields: [planId], references: [id])
+  feature   PlatformFeature  @relation(fields: [featureId], references: [id])
+  createdAt DateTime         @default(now())
+
+  @@unique([planId, featureId])
+  @@index([featureId])
+}
+
+model OrganizationSubscription {
+  id                     String                      @id @default(cuid())
+  tenantId               String
+  tenant                 Tenant                      @relation(fields: [tenantId], references: [id])
+  organizationId         String                      @unique
+  organization           Organization                @relation(fields: [organizationId], references: [id])
+  planId                 String?
+  plan                   SubscriptionPlan?           @relation(fields: [planId], references: [id])
+  status                 SubscriptionStatus          @default(draft)
+  billingStatus          String                      @default("not_configured")
+  basePriceCents         Int                         @default(0)
+  activeClientPriceCents Int                         @default(0)
+  clinicianPriceCents    Int                         @default(0)
+  currency               String                      @default("usd")
+  billingInterval        String                      @default("month")
+  startsAt               DateTime                    @default(now())
+  trialEndsAt            DateTime?
+  currentPeriodStart     DateTime?
+  currentPeriodEnd       DateTime?
+  canceledAt             DateTime?
+  billingProvider        String?
+  billingCustomerId      String?
+  notes                  String?
+  usageSnapshots         OrganizationUsageSnapshot[]
+  invoices               OrganizationInvoice[]
+  createdAt              DateTime                    @default(now())
+  updatedAt              DateTime                    @updatedAt
+
+  @@index([tenantId, status])
+  @@index([planId])
+}
+
+model OrganizationFeatureOverride {
+  id              String          @id @default(cuid())
+  tenantId        String
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  organizationId  String
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  featureId       String
+  feature         PlatformFeature @relation(fields: [featureId], references: [id])
+  enabled         Boolean
+  reason          String?
+  createdByUserId String?
+  updatedByUserId String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@unique([organizationId, featureId])
+  @@index([tenantId, organizationId])
+}
+
+model OrganizationUsageSnapshot {
+  id               String                    @id @default(cuid())
+  tenantId         String
+  tenant           Tenant                    @relation(fields: [tenantId], references: [id])
+  organizationId   String
+  organization     Organization              @relation(fields: [organizationId], references: [id])
+  subscriptionId   String?
+  subscription     OrganizationSubscription? @relation(fields: [subscriptionId], references: [id])
+  snapshotDate     DateTime
+  periodStart      DateTime
+  periodEnd        DateTime
+  activeClients    Int                       @default(0)
+  activeClinicians Int                       @default(0)
+  metadata         Json?
+  createdAt        DateTime                  @default(now())
+
+  @@unique([organizationId, periodStart, periodEnd])
+  @@index([tenantId, snapshotDate])
+}
+
+model OrganizationInvoice {
+  id                String                        @id @default(cuid())
+  tenantId          String
+  tenant            Tenant                        @relation(fields: [tenantId], references: [id])
+  organizationId    String
+  organization      Organization                  @relation(fields: [organizationId], references: [id])
+  subscriptionId    String?
+  subscription      OrganizationSubscription?     @relation(fields: [subscriptionId], references: [id])
+  status            OrganizationInvoiceStatus     @default(draft)
+  invoiceNumber     String?
+  currency          String                        @default("usd")
+  subtotalCents     Int                           @default(0)
+  totalCents        Int                           @default(0)
+  invoiceDate       DateTime                      @default(now())
+  dueDate           DateTime?
+  paidAt            DateTime?
+  billingProvider   String?
+  billingCustomerId String?
+  externalInvoiceId String?
+  notes             String?
+  lineItems         OrganizationInvoiceLineItem[]
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
+
+  @@index([tenantId, status, invoiceDate])
+}
+
+model OrganizationInvoiceLineItem {
+  id              String                          @id @default(cuid())
+  invoiceId       String
+  invoice         OrganizationInvoice             @relation(fields: [invoiceId], references: [id])
+  type            OrganizationInvoiceLineItemType
+  featureKey      String?
+  description     String
+  quantity        Int                             @default(1)
+  unitAmountCents Int                             @default(0)
+  amountCents     Int                             @default(0)
+  metadata        Json?
+  createdAt       DateTime                        @default(now())
+
+  @@index([invoiceId])
 }
 
 model User {
