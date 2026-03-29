@@ -24,19 +24,48 @@ export type SessionUser = {
   mustChangePassword: boolean;
 };
 
+export type SessionAccessContext = {
+  type: 'USER' | 'SUPPORT';
+  platformRoles: string[];
+  activeOrganizationId: string | null;
+  activeMembershipId: string | null;
+  activeLocationId: string | null;
+  supportMode: boolean;
+  permissions: string[];
+};
+
+export type SessionOrganization = {
+  id: string;
+  name: string;
+  npi: string | null;
+};
+
+export type SessionLocation = {
+  id: string;
+  name: string;
+  timezone: string | null;
+};
+
+export type SessionSupportDetails = {
+  id: string;
+  reason: string | null;
+  ticketReference: string | null;
+  startedAt: string;
+  expiresAt: string;
+};
+
 export type AuthMeResponse = {
   landingPath: string;
   user: SessionUser;
   tenant: {
     id: string;
-    slug: string;
-    name: string;
-  };
-  organization: {
-    id: string;
-    name: string;
-    npi: string | null;
-  } | null;
+      slug: string;
+      name: string;
+    };
+  accessContext: SessionAccessContext;
+  organization: SessionOrganization | null;
+  location: SessionLocation | null;
+  supportSession: SessionSupportDetails | null;
 };
 
 export type LoginResponse = AuthMeResponse & {
@@ -65,6 +94,65 @@ export type ResetSystemResponse = {
   };
   deleted: Record<string, number>;
   remaining: Record<string, number>;
+};
+
+export type PlatformDashboardResponse = {
+  tenant: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  counts: {
+    organizations: number;
+    users: number;
+    consumers: number;
+    activeSupportSessions: number;
+  };
+  organizations: Array<{
+    id: string;
+    name: string;
+    identifier: string;
+    npi: string | null;
+    createdAt: string;
+    counts: {
+      users: number;
+      consumers: number;
+      admins: number;
+      activeSupportSessions: number;
+      locations: number;
+    };
+    locations: Array<{
+      id: string;
+      name: string;
+      timezone: string | null;
+      isActive: boolean;
+    }>;
+  }>;
+};
+
+export type StartSupportSessionInput = {
+  organizationId: string;
+  locationId?: string;
+  reason: string;
+  ticketReference?: string;
+};
+
+export type StartSupportSessionResponse = {
+  token: string;
+  supportSession: {
+    id: string;
+    organizationId: string;
+    locationId: string | null;
+    reason: string | null;
+    ticketReference: string | null;
+    supportMode: true;
+    expiresAt: string;
+  };
+};
+
+export type EndSupportSessionResponse = {
+  token: string;
+  supportSessionEnded: true;
 };
 
 export function getApiBaseUrlState() {
@@ -149,6 +237,34 @@ export async function resetSystemData(apiBaseUrl: string, token: string, confirm
   });
 }
 
+export async function fetchPlatformDashboard(apiBaseUrl: string, token: string) {
+  return apiFetch<PlatformDashboardResponse>(apiBaseUrl, '/v1/platform/dashboard', {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+}
+
+export async function startSupportSession(apiBaseUrl: string, token: string, payload: StartSupportSessionInput) {
+  return apiFetch<StartSupportSessionResponse>(apiBaseUrl, '/v1/platform/support/start', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function endSupportSession(apiBaseUrl: string, token: string) {
+  return apiFetch<EndSupportSessionResponse>(apiBaseUrl, '/v1/platform/support/end', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+}
+
 export function getLandingPathForRole(role: AppRole) {
   if (role === 'platform_admin' || role === 'org_admin') {
     return '/admin';
@@ -171,4 +287,64 @@ export function getDisplayRoleForShell(role: AppRole): AppRole {
   }
 
   return role;
+}
+
+export function sessionHasPlatformAuthority(session: Pick<AuthMeResponse, 'accessContext'>) {
+  return session.accessContext.platformRoles.length > 0;
+}
+
+export function sessionIsPlatformMode(session: AuthMeResponse) {
+  return sessionHasPlatformAuthority(session) && !session.accessContext.supportMode && !session.accessContext.activeOrganizationId;
+}
+
+export function sessionIsSupportMode(session: Pick<AuthMeResponse, 'accessContext'>) {
+  return session.accessContext.supportMode && Boolean(session.accessContext.activeOrganizationId);
+}
+
+export function sessionHasOrgContext(session: Pick<AuthMeResponse, 'accessContext'>) {
+  return Boolean(session.accessContext.activeOrganizationId);
+}
+
+export function getLandingPathForSession(session: AuthMeResponse) {
+  if (sessionIsPlatformMode(session)) {
+    return '/platform';
+  }
+
+  if (sessionHasOrgContext(session) && session.accessContext.permissions.includes('org.users.read')) {
+    return '/admin';
+  }
+
+  if (session.user.role === 'billing') {
+    return '/rcm';
+  }
+
+  if (session.user.role === 'consumer') {
+    return '/consumer';
+  }
+
+  if (sessionHasOrgContext(session) && session.accessContext.permissions.includes('clinical.consumers.read')) {
+    return '/clinical';
+  }
+
+  if (sessionHasOrgContext(session) && session.accessContext.permissions.includes('billing.work_items.read')) {
+    return '/rcm';
+  }
+
+  if (session.user.role === 'platform_admin' || session.user.role === 'support') {
+    return '/platform';
+  }
+
+  return '/clinical';
+}
+
+export function getShellRoleForSession(session: AuthMeResponse | null): AppRole {
+  if (!session) {
+    return 'org_admin';
+  }
+
+  if (sessionIsSupportMode(session)) {
+    return 'org_admin';
+  }
+
+  return getDisplayRoleForShell(session.user.role);
 }

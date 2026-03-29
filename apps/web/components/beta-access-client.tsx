@@ -6,7 +6,7 @@ import {
   clearStoredToken,
   fetchMe,
   getApiBaseUrlState,
-  getLandingPathForRole,
+  getLandingPathForSession,
   getStoredToken,
   loginWithBetaAccessCode,
   loginWithPassword,
@@ -48,7 +48,7 @@ export function BetaAccessClient() {
 
     fetchMe(apiBaseUrl, existingToken)
       .then((session) => {
-        router.replace(session.landingPath || getLandingPathForRole(session.user.role));
+        router.replace(getLandingPathForSession(session));
       })
       .catch(() => {
         clearStoredToken();
@@ -71,7 +71,7 @@ export function BetaAccessClient() {
     fetchMe(apiBaseUrl, inviteToken)
       .then((session) => {
         storeToken(inviteToken);
-        router.replace(session.landingPath || getLandingPathForRole(session.user.role));
+        router.replace(getLandingPathForSession(session));
       })
       .catch((validationError: unknown) => {
         setError(validationError instanceof Error ? validationError.message : 'Unable to validate this emergency access token.');
@@ -94,7 +94,7 @@ export function BetaAccessClient() {
 
       const login = await loginWithPassword(apiBaseUrl, emailInput.trim().toLowerCase(), passwordInput.trim());
       storeToken(login.token);
-      router.replace(login.landingPath || getLandingPathForRole(login.user.role));
+      router.replace(getLandingPathForSession(login));
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : 'Unable to sign in to the beta environment.');
       setStatus('idle');
@@ -118,7 +118,7 @@ export function BetaAccessClient() {
       if (trimmedToken) {
         const session = await fetchMe(apiBaseUrl, trimmedToken);
         storeToken(trimmedToken);
-        router.replace(session.landingPath || getLandingPathForRole(session.user.role));
+        router.replace(getLandingPathForSession(session));
         return;
       }
 
@@ -131,7 +131,7 @@ export function BetaAccessClient() {
 
       const login = await loginWithBetaAccessCode(apiBaseUrl, emailInput.trim().toLowerCase(), trimmedAccessCode);
       storeToken(login.token);
-      router.replace(login.landingPath || getLandingPathForRole(login.user.role));
+      router.replace(getLandingPathForSession(login));
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : 'Unable to use emergency beta access.');
       setStatus('idle');
