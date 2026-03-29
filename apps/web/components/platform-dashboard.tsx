@@ -84,6 +84,11 @@ export function PlatformDashboard() {
               Create Organization
             </Link>
           ) : null}
+          {canManageOrganizations ? (
+            <Link href="/platform/settings" className="secondaryButton">
+              Platform Settings
+            </Link>
+          ) : null}
           <Link href="/platform/support" className="secondaryButton">
             Open Support Tools
           </Link>
@@ -276,6 +281,23 @@ export function PlatformDashboard() {
           </div>
         </article>
       </section>
+
+      {canManageOrganizations ? (
+        <section className="adminPanelGrid">
+          <article className="card dangerCard">
+            <div className="sectionHeaderRow">
+              <div>
+                <p className="eyebrow">Danger zone</p>
+                <h2 className="sectionTitle">System Reset</h2>
+                <p className="muted">Platform Admin-only destructive controls now live in Platform Settings instead of the org-style admin workspace.</p>
+              </div>
+              <Link href="/platform/settings" className="dangerButton">
+                Open Platform Settings
+              </Link>
+            </div>
+          </article>
+        </section>
+      ) : null}
     </PlatformWorkspaceShell>
   );
 }

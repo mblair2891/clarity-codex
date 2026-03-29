@@ -4,6 +4,7 @@ import { hasPlatformRole, requirePlatformRole } from '../lib/access/org-scope.js
 import { permissions } from '../lib/access/permissions.js';
 import { requireRoutePermission } from '../lib/access/route-permissions.js';
 import { prisma } from '../lib/db.js';
+import { ResetSystemService } from '../services/reset-system.service.js';
 
 const organizationParamsSchema = z.object({
   organizationId: z.string().min(1)
@@ -19,6 +20,10 @@ const createOrganizationSchema = z.object({
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Slug must use lowercase letters, numbers, and hyphens only.'),
   npi: z.string().trim().max(20).optional().or(z.literal('')),
   taxId: z.string().trim().max(20).optional().or(z.literal(''))
+});
+
+const resetSystemSchema = z.object({
+  confirmationText: z.string().trim().min(1)
 });
 
 type LoadedOrganization = Awaited<ReturnType<typeof loadOrganizations>>[number];
@@ -259,6 +264,8 @@ function serializeOrganizationSummary(
 }
 
 export async function platformRoutes(app: FastifyInstance) {
+  const resetSystemService = new ResetSystemService(app.log);
+
   app.get('/v1/platform/dashboard', async (request) => {
     await app.authenticateRequest(request);
     const access = requireRoutePermission(request, permissions.platformOrganizationsRead);
@@ -601,5 +608,30 @@ export async function platformRoutes(app: FastifyInstance) {
         platformSupport: 'Uses scoped support mode to enter an organization without becoming the platform control plane.'
       }
     };
+  });
+
+  app.post('/v1/platform/system/reset', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requireRoutePermission(request, permissions.platformSystemReset);
+    requirePlatformRole(access, 'platform_admin');
+
+    if (access.supportMode || access.activeOrganizationId) {
+      return reply.code(403).send({
+        message: 'System Reset is only available from the platform control plane, not support mode or organization-scoped access.'
+      });
+    }
+
+    if (!ResetSystemService.isEnabled()) {
+      return reply.code(403).send({ message: 'System reset is only enabled in the beta environment.' });
+    }
+
+    const payload = resetSystemSchema.parse(request.body);
+
+    if (payload.confirmationText !== 'RESET SYSTEM') {
+      return reply.code(400).send({ message: 'Type RESET SYSTEM exactly to confirm the platform reset.' });
+    }
+
+    const result = await resetSystemService.resetSystem(access);
+    return reply.send(result);
   });
 }

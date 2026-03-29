@@ -32,6 +32,12 @@ export const navigation: NavigationItem[] = [
     description: 'Scoped support-session launcher and support access history.'
   },
   {
+    title: 'Platform Settings',
+    href: '/platform/settings',
+    roles: ['platform_admin'],
+    description: 'Danger-zone controls for platform-wide configuration and system reset.'
+  },
+  {
     title: 'Recovery Hub',
     href: '/consumer',
     roles: ['consumer', 'clinical_staff', 'clinician', 'case_manager'],
