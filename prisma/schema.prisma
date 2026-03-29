@@ -101,6 +101,7 @@ model Organization {
   tenantId         String
   tenant           Tenant            @relation(fields: [tenantId], references: [id])
   name             String
+  slug             String?
   npi              String?
   taxId            String?
   memberships      Membership[]
@@ -114,6 +115,8 @@ model Organization {
   groups           GroupSession[]
   encounters       Encounter[]
   createdAt        DateTime          @default(now())
+
+  @@unique([tenantId, slug])
 }
 
 model User {

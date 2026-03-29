@@ -96,38 +96,170 @@ export type ResetSystemResponse = {
   remaining: Record<string, number>;
 };
 
+export type PlatformSubscriptionScaffold = {
+  planName: string | null;
+  subscriptionStatus: string;
+  billingStatus: string;
+  billingCustomerId: string | null;
+  nextInvoiceDate: string | null;
+};
+
+export type PlatformOrganizationSummary = {
+  id: string;
+  name: string;
+  slug: string | null;
+  npi: string | null;
+  taxId: string | null;
+  createdAt: string;
+  counts: {
+    users: number;
+    totalMemberships: number;
+    consumers: number;
+    orgAdmins: number;
+    locations: number;
+    activeSupportSessions: number;
+    clinicalNotes: number;
+    unresolvedReviews: number;
+  };
+  subscription: PlatformSubscriptionScaffold;
+  locations: Array<{
+    id: string;
+    name: string;
+    timezone: string | null;
+    isActive: boolean;
+  }>;
+};
+
+export type PlatformSupportSessionSummary = {
+  id: string;
+  organizationId: string;
+  organizationName?: string;
+  supportUserId: string;
+  supportUserName: string;
+  supportUserEmail: string | null;
+  locationId: string | null;
+  reason: string | null;
+  ticketReference: string | null;
+  startedAt: string;
+  expiresAt: string;
+  endedAt: string | null;
+  revokedAt: string | null;
+  status: string;
+};
+
+export type PlatformUserSummary = {
+  id: string;
+  email: string;
+  fullName: string;
+  isActive: boolean;
+  role: string;
+  platformRoles: string[];
+  createdAt: string;
+};
+
 export type PlatformDashboardResponse = {
   tenant: {
     id: string;
     slug: string;
     name: string;
   };
-  counts: {
-    organizations: number;
-    users: number;
-    consumers: number;
+  summary: {
+    totalOrganizations: number;
+    totalPlatformUsers: number;
+    totalOrgUsers: number;
+    totalConsumers: number;
     activeSupportSessions: number;
+    recentSupportSessions: number;
+    subscriptionsByStatus: Array<{
+      status: string;
+      count: number;
+    }>;
   };
-  organizations: Array<{
+  billing: {
+    isConfigured: boolean;
+    plans: Array<{
+      name: string;
+      organizationCount: number;
+    }>;
+    subscriptionsByStatus: Array<{
+      status: string;
+      count: number;
+    }>;
+    note: string;
+  };
+  organizations: PlatformOrganizationSummary[];
+  platformUsers: PlatformUserSummary[];
+  support: {
+    active: PlatformSupportSessionSummary[];
+    recent: PlatformSupportSessionSummary[];
+  };
+};
+
+export type PlatformOrganizationsResponse = {
+  organizations: PlatformOrganizationSummary[];
+};
+
+export type PlatformOrganizationDetailResponse = {
+  organization: PlatformOrganizationSummary & {
+    orgAdmins: Array<{
+      id: string;
+      fullName: string;
+      email: string;
+      isActive: boolean;
+      role: string;
+    }>;
+    counts: PlatformOrganizationSummary['counts'] & {
+      appointments: number;
+      encounters: number;
+    };
+  };
+  support: {
+    active: PlatformSupportSessionSummary[];
+    recent: PlatformSupportSessionSummary[];
+  };
+  lifecycle: {
+    status: string;
+    note: string;
+  };
+};
+
+export type PlatformSupportSessionsResponse = {
+  activeSessions: PlatformSupportSessionSummary[];
+  recentSessions: PlatformSupportSessionSummary[];
+};
+
+export type PlatformUsersResponse = {
+  users: PlatformUserSummary[];
+  counts: {
+    total: number;
+    active: number;
+    platformAdmins: number;
+    supportUsers: number;
+  };
+  accessModel: {
+    platformAdmin: string;
+    platformSupport: string;
+  };
+};
+
+export type CreatePlatformOrganizationInput = {
+  name: string;
+  slug: string;
+  npi?: string;
+  taxId?: string;
+};
+
+export type CreatePlatformOrganizationResponse = {
+  created: true;
+  organization: {
     id: string;
     name: string;
-    identifier: string;
+    slug: string | null;
     npi: string | null;
+    taxId: string | null;
     createdAt: string;
-    counts: {
-      users: number;
-      consumers: number;
-      admins: number;
-      activeSupportSessions: number;
-      locations: number;
-    };
-    locations: Array<{
-      id: string;
-      name: string;
-      timezone: string | null;
-      isActive: boolean;
-    }>;
-  }>;
+    subscription: PlatformSubscriptionScaffold;
+  };
 };
 
 export type StartSupportSessionInput = {
@@ -239,6 +371,49 @@ export async function resetSystemData(apiBaseUrl: string, token: string, confirm
 
 export async function fetchPlatformDashboard(apiBaseUrl: string, token: string) {
   return apiFetch<PlatformDashboardResponse>(apiBaseUrl, '/v1/platform/dashboard', {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+}
+
+export async function fetchPlatformOrganizations(apiBaseUrl: string, token: string) {
+  return apiFetch<PlatformOrganizationsResponse>(apiBaseUrl, '/v1/platform/organizations', {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+}
+
+export async function fetchPlatformOrganizationDetail(apiBaseUrl: string, token: string, organizationId: string) {
+  return apiFetch<PlatformOrganizationDetailResponse>(apiBaseUrl, `/v1/platform/organizations/${organizationId}`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+}
+
+export async function createPlatformOrganization(apiBaseUrl: string, token: string, payload: CreatePlatformOrganizationInput) {
+  return apiFetch<CreatePlatformOrganizationResponse>(apiBaseUrl, '/v1/platform/organizations', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function fetchPlatformSupportSessions(apiBaseUrl: string, token: string) {
+  return apiFetch<PlatformSupportSessionsResponse>(apiBaseUrl, '/v1/platform/support/sessions', {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+}
+
+export async function fetchPlatformUsers(apiBaseUrl: string, token: string) {
+  return apiFetch<PlatformUsersResponse>(apiBaseUrl, '/v1/platform/users', {
     headers: {
       Authorization: `Bearer ${token}`
     }
