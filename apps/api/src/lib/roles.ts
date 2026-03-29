@@ -1,4 +1,4 @@
-import type { Role } from '@prisma/client';
+import type { PlatformRole, Role } from '@prisma/client';
 
 export const supportedBetaRoles = [
   'platform_admin',
@@ -26,4 +26,27 @@ export function getLandingPath(role: Role) {
   }
 
   return '/clinical';
+}
+
+export function getLandingPathForAccess(args: {
+  role: Role;
+  platformRoles?: PlatformRole[];
+  activeOrganizationId?: string | null;
+  supportMode?: boolean;
+}) {
+  const hasPlatformAuthority = (args.platformRoles?.length ?? 0) > 0;
+
+  if (hasPlatformAuthority && !args.supportMode && !args.activeOrganizationId) {
+    return '/platform';
+  }
+
+  if (args.role === 'org_admin' || (args.role === 'platform_admin' && args.activeOrganizationId)) {
+    return '/admin';
+  }
+
+  if (args.role === 'support' && args.activeOrganizationId) {
+    return '/clinical';
+  }
+
+  return getLandingPath(args.role);
 }

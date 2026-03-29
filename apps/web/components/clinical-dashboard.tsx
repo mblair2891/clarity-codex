@@ -8,10 +8,12 @@ import {
   ApiResponseError,
   apiFetch,
   clearStoredToken,
+  endSupportSession,
   fetchMe,
   getApiBaseUrlState,
-  getDisplayRoleForShell,
+  getLandingPathForSession,
   getStoredToken,
+  storeToken,
   type AuthMeResponse
 } from '../lib/beta-auth';
 
@@ -498,8 +500,8 @@ export function ClinicalDashboard({
     try {
       const session = knownSession ?? await fetchMe(apiBaseUrl, token);
 
-      if (!['/clinical', '/admin'].includes(session.landingPath) && session.user.role !== 'clinical_staff' && session.user.role !== 'clinician' && session.user.role !== 'case_manager') {
-        router.replace(session.landingPath);
+      if (!['/clinical', '/admin'].includes(getLandingPathForSession(session)) && session.user.role !== 'clinical_staff' && session.user.role !== 'clinician' && session.user.role !== 'case_manager') {
+        router.replace(getLandingPathForSession(session));
         return;
       }
 
@@ -582,6 +584,34 @@ export function ClinicalDashboard({
   function handleLogout() {
     clearStoredToken();
     router.replace('/login');
+  }
+
+  async function handleEndSupport() {
+    if (!apiBaseUrl) {
+      setError(apiBaseUrlError);
+      return;
+    }
+
+    const token = getStoredToken();
+    if (!token) {
+      router.replace('/login');
+      return;
+    }
+
+    try {
+      const response = await endSupportSession(apiBaseUrl, token);
+      storeToken(response.token);
+      const session = await fetchMe(apiBaseUrl, response.token);
+      router.replace(getLandingPathForSession(session));
+    } catch (actionError) {
+      if (actionError instanceof ApiResponseError && actionError.status === 401) {
+        clearStoredToken();
+        router.replace('/login');
+        return;
+      }
+
+      setError(actionError instanceof Error ? actionError.message : 'Unable to end the active support session.');
+    }
   }
 
   async function handleNoteSubmit(event: FormEvent<HTMLFormElement>) {
@@ -709,7 +739,7 @@ export function ClinicalDashboard({
   const welcomeName = dashboard?.clinician.fullName ?? me?.user.fullName ?? 'Clinical team';
 
   return (
-    <RoleShell role={getDisplayRoleForShell(me?.user.role ?? 'clinical_staff')} title="Clinical Command">
+    <RoleShell role="clinical_staff" title="Clinical Command" session={me} onLogout={handleLogout} onEndSupport={handleEndSupport}>
       {isLoading ? (
         <section className="consumerStack">
           <article className="card">

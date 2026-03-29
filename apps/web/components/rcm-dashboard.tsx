@@ -8,10 +8,12 @@ import {
   ApiResponseError,
   apiFetch,
   clearStoredToken,
+  endSupportSession,
   fetchMe,
   getApiBaseUrlState,
-  getDisplayRoleForShell,
+  getLandingPathForSession,
   getStoredToken,
+  storeToken,
   type AuthMeResponse
 } from '../lib/beta-auth';
 
@@ -536,7 +538,7 @@ export function RcmDashboard({ initialConsumerId = null }: { initialConsumerId?:
       const session = knownSession ?? (await fetchMe(apiBaseUrl, token));
 
       if (!['billing', 'org_admin', 'platform_admin'].includes(session.user.role)) {
-        router.replace(session.landingPath);
+        router.replace(getLandingPathForSession(session));
         return;
       }
 
@@ -632,6 +634,34 @@ export function RcmDashboard({ initialConsumerId = null }: { initialConsumerId?:
   function handleLogout() {
     clearStoredToken();
     router.replace('/login');
+  }
+
+  async function handleEndSupport() {
+    if (!apiBaseUrl) {
+      setError(apiBaseUrlError);
+      return;
+    }
+
+    const token = getStoredToken();
+    if (!token) {
+      router.replace('/login');
+      return;
+    }
+
+    try {
+      const response = await endSupportSession(apiBaseUrl, token);
+      storeToken(response.token);
+      const session = await fetchMe(apiBaseUrl, response.token);
+      router.replace(getLandingPathForSession(session));
+    } catch (actionError) {
+      if (actionError instanceof ApiResponseError && actionError.status === 401) {
+        clearStoredToken();
+        router.replace('/login');
+        return;
+      }
+
+      setError(actionError instanceof Error ? actionError.message : 'Unable to end the active support session.');
+    }
   }
 
   function handleApiError(actionError: unknown, fallbackMessage: string) {
@@ -837,7 +867,7 @@ export function RcmDashboard({ initialConsumerId = null }: { initialConsumerId?:
   const selectedClaimOptions = selectedAccount?.createOptions.claims ?? [];
 
   return (
-    <RoleShell role={getDisplayRoleForShell(me?.user.role ?? 'billing')} title="Revenue Cycle Hub">
+    <RoleShell role="billing" title="Revenue Cycle Hub" session={me} onLogout={handleLogout} onEndSupport={handleEndSupport}>
       {isLoading && !dashboard ? (
         <section className="consumerStack">
           <article className="card">

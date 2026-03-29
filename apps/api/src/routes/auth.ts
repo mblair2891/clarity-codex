@@ -1,12 +1,12 @@
-import type { PlatformRole, Role, User } from '@prisma/client';
+import type { OrganizationRole, PlatformRole, Role, User } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { env } from '../config/env.js';
 import { prisma } from '../lib/db.js';
 import { deriveLegacyPlatformRoles } from '../lib/access/types.js';
-import { permissions } from '../lib/access/permissions.js';
+import { permissions, resolvePermissions } from '../lib/access/permissions.js';
 import { requireRequestAccess, requireRoutePermission } from '../lib/access/route-permissions.js';
-import { getLandingPath } from '../lib/roles.js';
+import { getLandingPathForAccess } from '../lib/roles.js';
 import { hashPassword, verifyPassword } from '../lib/password.js';
 
 const loginSchema = z.object({
@@ -40,6 +40,7 @@ async function buildAuthPayload(app: FastifyInstance, user: User & {
   tenant: { id: string; slug: string; name: string };
   memberships: Array<{
     id: string;
+    organizationRole: OrganizationRole | null;
     organization: {
       id: string;
       name: string;
@@ -55,6 +56,11 @@ async function buildAuthPayload(app: FastifyInstance, user: User & {
   const platformRoles = user.platformRoles.length
     ? user.platformRoles.map((platformRole) => platformRole.role)
     : deriveLegacyPlatformRoles(user.role);
+  const resolvedPermissions = resolvePermissions({
+    platformRoles,
+    organizationRole: activeMembership?.organizationRole ?? null,
+    legacyRole: user.role
+  });
   const session = await prisma.userSession.create({
     data: {
       userId: user.id,
@@ -72,7 +78,12 @@ async function buildAuthPayload(app: FastifyInstance, user: User & {
 
   return {
     token,
-    landingPath: getLandingPath(user.role),
+    landingPath: getLandingPathForAccess({
+      role: user.role,
+      platformRoles,
+      activeOrganizationId: session.activeOrganizationId,
+      supportMode: session.supportMode
+    }),
     user: {
       id: user.id,
       email: user.email,
@@ -86,13 +97,24 @@ async function buildAuthPayload(app: FastifyInstance, user: User & {
       slug: user.tenant.slug,
       name: user.tenant.name
     },
+    accessContext: {
+      type: session.supportMode ? 'SUPPORT' : 'USER',
+      platformRoles,
+      activeOrganizationId: session.activeOrganizationId,
+      activeMembershipId: session.activeMembershipId,
+      activeLocationId: session.activeLocationId,
+      supportMode: session.supportMode,
+      permissions: resolvedPermissions
+    },
     organization: activeMembership?.organization
       ? {
           id: activeMembership.organization.id,
           name: activeMembership.organization.name,
           npi: activeMembership.organization.npi
         }
-      : null
+      : null,
+    location: null,
+    supportSession: null
   };
 }
 
@@ -285,13 +307,31 @@ export async function authRoutes(app: FastifyInstance) {
       throw error;
     }
 
-    const activeMembership =
+    const [activeMembership, activeLocation, supportAccessSession] = await Promise.all([
+      Promise.resolve(
       user.memberships.find((membership) => membership.id === access.activeMembershipId)
       ?? user.memberships.find((membership) => membership.organization.id === access.activeOrganizationId)
-      ?? null;
+      ?? null
+      ),
+      access.activeLocationId
+        ? prisma.location.findUnique({
+            where: { id: access.activeLocationId }
+          })
+        : Promise.resolve(null),
+      access.supportAccessSessionId
+        ? prisma.supportAccessSession.findUnique({
+            where: { id: access.supportAccessSessionId }
+          })
+        : Promise.resolve(null)
+    ]);
 
     return {
-      landingPath: getLandingPath(user.role as Role),
+      landingPath: getLandingPathForAccess({
+        role: user.role as Role,
+        platformRoles: access.platformRoles,
+        activeOrganizationId: access.activeOrganizationId,
+        supportMode: access.supportMode
+      }),
       user: {
         id: user.id,
         email: user.email,
@@ -319,6 +359,22 @@ export async function authRoutes(app: FastifyInstance) {
             id: activeMembership.organization.id,
             name: activeMembership.organization.name,
             npi: activeMembership.organization.npi
+          }
+        : null,
+      location: activeLocation
+        ? {
+            id: activeLocation.id,
+            name: activeLocation.name,
+            timezone: activeLocation.timezone
+          }
+        : null,
+      supportSession: supportAccessSession
+        ? {
+            id: supportAccessSession.id,
+            reason: supportAccessSession.reason,
+            ticketReference: supportAccessSession.ticketRef,
+            startedAt: supportAccessSession.startedAt.toISOString(),
+            expiresAt: supportAccessSession.expiresAt.toISOString()
           }
         : null
     };

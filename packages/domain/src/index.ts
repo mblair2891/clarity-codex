@@ -20,6 +20,12 @@ export interface NavigationItem {
 
 export const navigation: NavigationItem[] = [
   {
+    title: 'Platform Home',
+    href: '/platform',
+    roles: ['platform_admin', 'support'],
+    description: 'Platform-level visibility, tenant summaries, and support session launch.'
+  },
+  {
     title: 'Recovery Hub',
     href: '/consumer',
     roles: ['consumer', 'clinical_staff', 'clinician', 'case_manager'],
