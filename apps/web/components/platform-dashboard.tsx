@@ -85,6 +85,16 @@ export function PlatformDashboard() {
             </Link>
           ) : null}
           {canManageOrganizations ? (
+            <Link href="/platform/subscriptions" className="secondaryButton">
+              Subscriptions
+            </Link>
+          ) : null}
+          {canManageOrganizations ? (
+            <Link href="/platform/plans" className="secondaryButton">
+              Plans
+            </Link>
+          ) : null}
+          {canManageOrganizations ? (
             <Link href="/platform/settings" className="secondaryButton">
               Platform Settings
             </Link>
@@ -124,8 +134,12 @@ export function PlatformDashboard() {
         </article>
         <article className="card">
           <span className="muted">Subscriptions</span>
-          <span className="metric">{dashboard?.summary.subscriptionsByStatus[0]?.count ?? (isSessionLoading || isLoadingDashboard ? '...' : 0)}</span>
-          <p className="muted">Billing is scaffolded for beta, so organizations currently sit in a not-configured status bucket.</p>
+          <span className="metric">
+            {dashboard
+              ? dashboard.summary.subscriptionsByStatus.reduce((total, item) => total + item.count, 0)
+              : (isSessionLoading || isLoadingDashboard ? '...' : 0)}
+          </span>
+          <p className="muted">Subscription records now track plan assignments, lifecycle status, and pricing scaffolding per organization.</p>
         </article>
       </section>
 
@@ -192,9 +206,19 @@ export function PlatformDashboard() {
         <article className="card">
           <div className="sectionHeaderRow">
             <div>
-              <h2 className="sectionTitle">Billing and plan scaffolding</h2>
-              <p className="muted">The control plane now carries explicit SaaS subscription placeholders, even before real billing automation is wired in.</p>
+              <h2 className="sectionTitle">Plans and billing scaffolding</h2>
+              <p className="muted">Plans, org subscriptions, and feature entitlements are now first-class control-plane records.</p>
             </div>
+            {canManageOrganizations ? (
+              <div className="actionRow">
+                <Link href="/platform/plans" className="secondaryButton">
+                  View Plans
+                </Link>
+                <Link href="/platform/subscriptions" className="primaryButton">
+                  Manage Subscriptions
+                </Link>
+              </div>
+            ) : null}
           </div>
           <div className="timeline" style={{ marginTop: 16 }}>
             {dashboard?.billing.plans.map((plan) => (
