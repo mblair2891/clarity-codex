@@ -105,12 +105,20 @@ export type PlatformSubscriptionScaffold = {
   billingStatus: string;
   billingCustomerId: string | null;
   billingProvider: string | null;
+  billingContactEmail: string | null;
+  customPricingEnabled: boolean;
+  enterpriseManaged: boolean;
   basePriceCents: number;
+  annualBasePriceCents: number | null;
+  setupFeeCents: number | null;
   activeClientPriceCents: number;
   clinicianPriceCents: number;
+  includedActiveClients: number | null;
+  includedClinicians: number | null;
   currency: string;
   billingInterval: string;
   startsAt: string | null;
+  trialStartsAt: string | null;
   trialEndsAt: string | null;
   currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
@@ -126,16 +134,44 @@ export type PlatformPlan = {
   key: string;
   name: string;
   description: string | null;
+  shortDescription: string | null;
+  longDescription: string | null;
   isActive: boolean;
   sortOrder: number;
+  targetCustomerProfile: string | null;
+  customPricingRequired: boolean;
+  salesContactRequired: boolean;
+  badgeLabel: string | null;
   pricing: {
     basePriceCents: number;
+    annualBasePriceCents: number | null;
+    setupFeeCents: number | null;
+    trialDays: number | null;
     activeClientPriceCents: number;
     clinicianPriceCents: number;
+    includedActiveClients: number | null;
+    includedClinicians: number | null;
     currency: string;
     billingInterval: string;
   };
-  includedFeatures: PlatformFeature[];
+  limits: {
+    maxLocations: number | null;
+    maxOrgUsers: number | null;
+    maxClinicians: number | null;
+    maxActiveClients: number | null;
+    unlimitedLocations: boolean;
+    unlimitedOrgUsers: boolean;
+    unlimitedClinicians: boolean;
+    unlimitedActiveClients: boolean;
+  };
+  packaging: {
+    apiAccessIncluded: boolean;
+    ssoIncluded: boolean;
+    customBrandingIncluded: boolean;
+  };
+  includedFeatures: PlatformPlanFeature[];
+  availableAddOns: PlatformPlanFeature[];
+  featureMatrix: PlatformPlanFeature[];
   organizationCount: number;
   createdAt: string;
   updatedAt: string;
@@ -146,17 +182,38 @@ export type PlatformFeature = {
   key: string;
   name: string;
   description: string | null;
+  longDescription: string | null;
   category: string | null;
   isActive: boolean;
+  isAddOn: boolean;
+  defaultMonthlyPriceCents: number | null;
+  defaultAnnualPriceCents: number | null;
+  badgeLabel: string | null;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
 };
 
+export type PlatformPlanFeature = {
+  feature: PlatformFeature;
+  availability: 'included' | 'add_on' | 'excluded';
+  included: boolean;
+  monthlyPriceCents: number | null;
+  annualPriceCents: number | null;
+  notes: string | null;
+};
+
 export type PlatformOrganizationFeature = PlatformFeature & {
   enabled: boolean;
   includedInPlan: boolean;
+  availableAsAddOn: boolean;
   source: 'plan' | 'override' | 'none';
+  planAvailability: 'included' | 'add_on' | 'excluded';
+  planPricing: {
+    monthlyPriceCents: number | null;
+    annualPriceCents: number | null;
+    notes: string | null;
+  } | null;
   override: {
     id: string;
     enabled: boolean;
@@ -271,6 +328,14 @@ export type PlatformFeaturesResponse = {
   features: PlatformFeature[];
 };
 
+export type PlatformPricingCatalogResponse = {
+  plans: PlatformPlan[];
+  features: PlatformFeature[];
+  defaults: {
+    planKeys: string[];
+  };
+};
+
 export type PlatformSubscriptionsResponse = {
   subscriptions: Array<{
     organization: {
@@ -326,17 +391,25 @@ export type UpsertPlatformOrganizationSubscriptionInput = {
   status: string;
   billingStatus: string;
   basePriceCents: number;
+  annualBasePriceCents?: number | null;
+  setupFeeCents?: number | null;
   activeClientPriceCents: number;
   clinicianPriceCents: number;
+  includedActiveClients?: number | null;
+  includedClinicians?: number | null;
   currency: string;
   billingInterval: string;
   startsAt?: string;
+  trialStartsAt?: string | null;
   trialEndsAt?: string | null;
   currentPeriodStart?: string | null;
   currentPeriodEnd?: string | null;
   canceledAt?: string | null;
   billingProvider?: string | null;
   billingCustomerId?: string | null;
+  billingContactEmail?: string | null;
+  customPricingEnabled?: boolean;
+  enterpriseManaged?: boolean;
   notes?: string | null;
 };
 
@@ -369,6 +442,81 @@ export type PatchPlatformOrganizationFeaturesInput = {
     enabled: boolean;
     reason?: string | null;
   }>;
+};
+
+export type UpsertPlatformPlanInput = {
+  key: string;
+  name: string;
+  description: string;
+  shortDescription: string;
+  longDescription: string;
+  isActive: boolean;
+  sortOrder: number;
+  basePriceCents: number;
+  annualBasePriceCents?: number | null;
+  setupFeeCents?: number | null;
+  trialDays?: number | null;
+  activeClientPriceCents: number;
+  clinicianPriceCents: number;
+  includedActiveClients?: number | null;
+  includedClinicians?: number | null;
+  currency: string;
+  billingInterval: string;
+  targetCustomerProfile: string;
+  customPricingRequired: boolean;
+  salesContactRequired: boolean;
+  badgeLabel?: string | null;
+  maxLocations?: number | null;
+  maxOrgUsers?: number | null;
+  maxClinicians?: number | null;
+  maxActiveClients?: number | null;
+  unlimitedLocations: boolean;
+  unlimitedOrgUsers: boolean;
+  unlimitedClinicians: boolean;
+  unlimitedActiveClients: boolean;
+  apiAccessIncluded: boolean;
+  ssoIncluded: boolean;
+  customBrandingIncluded: boolean;
+  features: Array<{
+    featureId: string;
+    availability: 'included' | 'add_on' | 'excluded';
+    monthlyPriceCents?: number | null;
+    annualPriceCents?: number | null;
+    notes?: string | null;
+  }>;
+};
+
+export type PatchPlatformPlanInput = Partial<UpsertPlatformPlanInput>;
+
+export type UpsertPlatformPlanResponse = {
+  created?: true;
+  updated?: true;
+  plan: PlatformPlan;
+};
+
+export type PatchPlatformFeatureInput = {
+  name?: string;
+  description?: string;
+  longDescription?: string;
+  category?: string | null;
+  isActive?: boolean;
+  isAddOn?: boolean;
+  defaultMonthlyPriceCents?: number | null;
+  defaultAnnualPriceCents?: number | null;
+  badgeLabel?: string | null;
+  sortOrder?: number;
+};
+
+export type PatchPlatformFeatureResponse = {
+  updated: true;
+  feature: PlatformFeature;
+};
+
+export type BootstrapPlatformPricingResponse = {
+  bootstrapped: true;
+  seededPlans: string[];
+  seededFeatures: string[];
+  plans: PlatformPlan[];
 };
 
 export type PlatformSupportSessionsResponse = {
@@ -549,6 +697,14 @@ export async function fetchPlatformFeatures(apiBaseUrl: string, token: string) {
   });
 }
 
+export async function fetchPlatformPricingCatalog(apiBaseUrl: string, token: string) {
+  return apiFetch<PlatformPricingCatalogResponse>(apiBaseUrl, '/v1/platform/pricing/catalog', {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+}
+
 export async function fetchPlatformSubscriptions(apiBaseUrl: string, token: string) {
   return apiFetch<PlatformSubscriptionsResponse>(apiBaseUrl, '/v1/platform/subscriptions', {
     headers: {
@@ -657,6 +813,48 @@ export async function createPlatformOrganization(apiBaseUrl: string, token: stri
       Authorization: `Bearer ${token}`
     },
     body: JSON.stringify(payload)
+  });
+}
+
+export async function createPlatformPlan(apiBaseUrl: string, token: string, payload: UpsertPlatformPlanInput) {
+  return apiFetch<UpsertPlatformPlanResponse>(apiBaseUrl, '/v1/platform/plans', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updatePlatformPlan(apiBaseUrl: string, token: string, planId: string, payload: PatchPlatformPlanInput) {
+  return apiFetch<UpsertPlatformPlanResponse>(apiBaseUrl, `/v1/platform/plans/${planId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updatePlatformFeature(apiBaseUrl: string, token: string, featureId: string, payload: PatchPlatformFeatureInput) {
+  return apiFetch<PatchPlatformFeatureResponse>(apiBaseUrl, `/v1/platform/features/${featureId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function bootstrapPlatformPricingCatalog(apiBaseUrl: string, token: string) {
+  return apiFetch<BootstrapPlatformPricingResponse>(apiBaseUrl, '/v1/platform/pricing/bootstrap', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
   });
 }
 

@@ -1,9 +1,12 @@
+import type { Prisma } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requirePlatformRole } from '../lib/access/org-scope.js';
 import { permissions } from '../lib/access/permissions.js';
 import {
+  bootstrapDefaultPricingCatalog,
   buildSubscriptionScaffold,
+  DEFAULT_PLAN_DEFINITIONS,
   resolveEffectiveFeatures,
   serializeFeature,
   serializePlan,
@@ -16,6 +19,14 @@ import { ResetSystemService } from '../services/reset-system.service.js';
 
 const organizationParamsSchema = z.object({
   organizationId: z.string().min(1)
+});
+
+const planParamsSchema = z.object({
+  planId: z.string().min(1)
+});
+
+const featureParamsSchema = z.object({
+  featureId: z.string().min(1)
 });
 
 const createOrganizationSchema = z.object({
@@ -35,23 +46,93 @@ const resetSystemSchema = z.object({
 });
 
 const subscriptionStatusSchema = z.enum(['draft', 'trialing', 'active', 'past_due', 'suspended', 'canceled']);
+const planFeatureAvailabilitySchema = z.enum(['included', 'add_on', 'excluded']);
+
+const planFeatureSchema = z.object({
+  featureId: z.string().min(1),
+  availability: planFeatureAvailabilitySchema,
+  monthlyPriceCents: z.number().int().min(0).nullable().optional(),
+  annualPriceCents: z.number().int().min(0).nullable().optional(),
+  notes: z.string().trim().max(500).nullable().optional()
+});
+
+const planCreateSchema = z.object({
+  key: z.string().trim().min(2).max(60).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  name: z.string().trim().min(2).max(120),
+  description: z.string().trim().min(2).max(240),
+  shortDescription: z.string().trim().min(2).max(240),
+  longDescription: z.string().trim().min(2).max(4_000),
+  isActive: z.boolean(),
+  sortOrder: z.number().int().min(0),
+  basePriceCents: z.number().int().min(0),
+  annualBasePriceCents: z.number().int().min(0).nullable().optional(),
+  setupFeeCents: z.number().int().min(0).nullable().optional(),
+  trialDays: z.number().int().min(0).nullable().optional(),
+  activeClientPriceCents: z.number().int().min(0),
+  clinicianPriceCents: z.number().int().min(0),
+  includedActiveClients: z.number().int().min(0).nullable().optional(),
+  includedClinicians: z.number().int().min(0).nullable().optional(),
+  currency: z.string().trim().min(3).max(8).default('usd'),
+  billingInterval: z.string().trim().min(1).max(20).default('month'),
+  targetCustomerProfile: z.string().trim().min(2).max(1_000),
+  customPricingRequired: z.boolean(),
+  salesContactRequired: z.boolean(),
+  badgeLabel: z.string().trim().max(40).nullable().optional(),
+  maxLocations: z.number().int().min(0).nullable().optional(),
+  maxOrgUsers: z.number().int().min(0).nullable().optional(),
+  maxClinicians: z.number().int().min(0).nullable().optional(),
+  maxActiveClients: z.number().int().min(0).nullable().optional(),
+  unlimitedLocations: z.boolean(),
+  unlimitedOrgUsers: z.boolean(),
+  unlimitedClinicians: z.boolean(),
+  unlimitedActiveClients: z.boolean(),
+  apiAccessIncluded: z.boolean(),
+  ssoIncluded: z.boolean(),
+  customBrandingIncluded: z.boolean(),
+  features: z.array(planFeatureSchema)
+});
+
+const planPatchSchema = planCreateSchema.partial().extend({
+  features: z.array(planFeatureSchema).optional()
+});
+
+const featurePatchSchema = z.object({
+  name: z.string().trim().min(2).max(120).optional(),
+  description: z.string().trim().min(2).max(240).optional(),
+  longDescription: z.string().trim().min(2).max(4_000).optional(),
+  category: z.string().trim().min(2).max(60).nullable().optional(),
+  isActive: z.boolean().optional(),
+  isAddOn: z.boolean().optional(),
+  defaultMonthlyPriceCents: z.number().int().min(0).nullable().optional(),
+  defaultAnnualPriceCents: z.number().int().min(0).nullable().optional(),
+  badgeLabel: z.string().trim().max(40).nullable().optional(),
+  sortOrder: z.number().int().min(0).optional()
+});
 
 const subscriptionMutationSchema = z.object({
   planId: z.string().min(1).nullable().optional(),
   status: subscriptionStatusSchema,
   billingStatus: z.string().trim().min(1).max(40),
   basePriceCents: z.number().int().min(0),
+  annualBasePriceCents: z.number().int().min(0).nullable().optional(),
+  setupFeeCents: z.number().int().min(0).nullable().optional(),
   activeClientPriceCents: z.number().int().min(0),
   clinicianPriceCents: z.number().int().min(0),
+  includedActiveClients: z.number().int().min(0).nullable().optional(),
+  includedClinicians: z.number().int().min(0).nullable().optional(),
   currency: z.string().trim().min(3).max(8).default('usd'),
   billingInterval: z.string().trim().min(1).max(20).default('month'),
   startsAt: z.string().datetime().optional(),
+  trialStartsAt: z.string().datetime().nullable().optional(),
   trialEndsAt: z.string().datetime().nullable().optional(),
   currentPeriodStart: z.string().datetime().nullable().optional(),
   currentPeriodEnd: z.string().datetime().nullable().optional(),
   canceledAt: z.string().datetime().nullable().optional(),
   billingProvider: z.string().trim().max(40).nullable().optional(),
   billingCustomerId: z.string().trim().max(191).nullable().optional(),
+  billingContactEmail: z.string().trim().email().max(191).nullable().optional(),
+  customPricingEnabled: z.boolean().optional(),
+  enterpriseManaged: z.boolean().optional(),
   notes: z.string().trim().max(2_000).nullable().optional()
 });
 
@@ -110,6 +191,84 @@ function requirePlatformControlPlaneAccess(access: ReturnType<typeof requireRout
 
 function parseOptionalDate(value?: string | null) {
   return value ? new Date(value) : null;
+}
+
+function normalizePlanKey(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function serializePricingBootstrapResult(result: Awaited<ReturnType<typeof bootstrapDefaultPricingCatalog>>) {
+  return {
+    seededPlans: result.plans.map((plan) => plan.key),
+    seededFeatures: result.features.map((feature) => feature.key)
+  };
+}
+
+async function loadPlanCatalog(tenantId: string) {
+  return prisma.subscriptionPlan.findMany({
+    where: {
+      tenantId
+    },
+    include: {
+      planFeatures: {
+        include: {
+          feature: true
+        }
+      },
+      _count: {
+        select: {
+          organizationSubscriptions: true
+        }
+      }
+    },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
+  });
+}
+
+async function syncPlanFeatureRows(args: {
+  tx: Prisma.TransactionClient;
+  planId: string;
+  tenantId: string;
+  features: Array<z.infer<typeof planFeatureSchema>>;
+}) {
+  const featureRecords = args.features.length
+    ? await args.tx.platformFeature.findMany({
+        where: {
+          tenantId: args.tenantId,
+          id: {
+            in: args.features.map((feature) => feature.featureId)
+          }
+        }
+      })
+    : [];
+
+  if (featureRecords.length !== args.features.length) {
+    const error = new Error('One or more plan features were not found.') as Error & { statusCode?: number };
+    error.statusCode = 404;
+    throw error;
+  }
+
+  await args.tx.planFeature.deleteMany({
+    where: {
+      planId: args.planId
+    }
+  });
+
+  if (!args.features.length) {
+    return;
+  }
+
+  await args.tx.planFeature.createMany({
+    data: args.features.map((feature) => ({
+      planId: args.planId,
+      featureId: feature.featureId,
+      included: feature.availability === 'included',
+      availability: feature.availability,
+      monthlyPriceCents: feature.monthlyPriceCents ?? null,
+      annualPriceCents: feature.annualPriceCents ?? null,
+      notes: normalizeOptionalString(feature.notes)
+    }))
+  });
 }
 
 async function loadOrganizations(tenantId: string) {
@@ -644,30 +803,237 @@ export async function platformRoutes(app: FastifyInstance) {
     await app.authenticateRequest(request);
     const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsRead));
 
-    const plans = await prisma.subscriptionPlan.findMany({
-      where: {
-        tenantId: access.tenantId
-      },
-      include: {
-        planFeatures: {
-          where: {
-            included: true
-          },
-          include: {
-            feature: true
-          }
-        },
-        _count: {
-          select: {
-            organizationSubscriptions: true
-          }
-        }
-      },
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
-    });
+    const plans = await loadPlanCatalog(access.tenantId);
 
     return {
       plans: plans.map(serializePlan)
+    };
+  });
+
+  app.post('/v1/platform/plans', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+    const payload = planCreateSchema.parse(request.body);
+    const normalizedKey = normalizePlanKey(payload.key);
+
+    const existingPlan = await prisma.subscriptionPlan.findFirst({
+      where: {
+        tenantId: access.tenantId,
+        key: normalizedKey
+      }
+    });
+
+    if (existingPlan) {
+      return reply.code(409).send({ message: 'A plan already exists with that key.' });
+    }
+
+    const createdPlan = await prisma.$transaction(async (tx) => {
+      const plan = await tx.subscriptionPlan.create({
+        data: {
+          tenantId: access.tenantId,
+          key: normalizedKey,
+          name: payload.name.trim(),
+          description: payload.description.trim(),
+          shortDescription: payload.shortDescription.trim(),
+          longDescription: payload.longDescription.trim(),
+          isActive: payload.isActive,
+          sortOrder: payload.sortOrder,
+          basePriceCents: payload.basePriceCents,
+          annualBasePriceCents: payload.annualBasePriceCents ?? null,
+          setupFeeCents: payload.setupFeeCents ?? null,
+          trialDays: payload.trialDays ?? null,
+          activeClientPriceCents: payload.activeClientPriceCents,
+          clinicianPriceCents: payload.clinicianPriceCents,
+          includedActiveClients: payload.includedActiveClients ?? null,
+          includedClinicians: payload.includedClinicians ?? null,
+          currency: payload.currency.toLowerCase(),
+          billingInterval: payload.billingInterval,
+          targetCustomerProfile: payload.targetCustomerProfile.trim(),
+          customPricingRequired: payload.customPricingRequired,
+          salesContactRequired: payload.salesContactRequired,
+          badgeLabel: normalizeOptionalString(payload.badgeLabel),
+          maxLocations: payload.maxLocations ?? null,
+          maxOrgUsers: payload.maxOrgUsers ?? null,
+          maxClinicians: payload.maxClinicians ?? null,
+          maxActiveClients: payload.maxActiveClients ?? null,
+          unlimitedLocations: payload.unlimitedLocations,
+          unlimitedOrgUsers: payload.unlimitedOrgUsers,
+          unlimitedClinicians: payload.unlimitedClinicians,
+          unlimitedActiveClients: payload.unlimitedActiveClients,
+          apiAccessIncluded: payload.apiAccessIncluded,
+          ssoIncluded: payload.ssoIncluded,
+          customBrandingIncluded: payload.customBrandingIncluded
+        }
+      });
+
+      await syncPlanFeatureRows({
+        tx,
+        planId: plan.id,
+        tenantId: access.tenantId,
+        features: payload.features
+      });
+
+      await tx.auditLog.create({
+        data: {
+          tenantId: access.tenantId,
+          userId: access.userId,
+          action: 'platform.plan.created',
+          entityType: 'subscription_plan',
+          entityId: plan.id,
+          metadata: {
+            key: plan.key,
+            name: plan.name
+          }
+        }
+      });
+
+      return tx.subscriptionPlan.findUniqueOrThrow({
+        where: {
+          id: plan.id
+        },
+        include: {
+          planFeatures: {
+            include: {
+              feature: true
+            }
+          },
+          _count: {
+            select: {
+              organizationSubscriptions: true
+            }
+          }
+        }
+      });
+    });
+
+    return reply.code(201).send({
+      created: true,
+      plan: serializePlan(createdPlan)
+    });
+  });
+
+  app.patch('/v1/platform/plans/:planId', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+    const params = planParamsSchema.parse(request.params);
+    const payload = planPatchSchema.parse(request.body);
+
+    const existingPlan = await prisma.subscriptionPlan.findFirst({
+      where: {
+        id: params.planId,
+        tenantId: access.tenantId
+      }
+    });
+
+    if (!existingPlan) {
+      return reply.code(404).send({ message: 'Plan was not found.' });
+    }
+
+    if (payload.key) {
+      const conflictingPlan = await prisma.subscriptionPlan.findFirst({
+        where: {
+          tenantId: access.tenantId,
+          key: normalizePlanKey(payload.key),
+          NOT: {
+            id: existingPlan.id
+          }
+        }
+      });
+
+      if (conflictingPlan) {
+        return reply.code(409).send({ message: 'Another plan already uses that key.' });
+      }
+    }
+
+    const updatedPlan = await prisma.$transaction(async (tx) => {
+      const plan = await tx.subscriptionPlan.update({
+        where: {
+          id: existingPlan.id
+        },
+        data: {
+          key: payload.key ? normalizePlanKey(payload.key) : existingPlan.key,
+          name: payload.name?.trim() ?? existingPlan.name,
+          description: payload.description?.trim() ?? existingPlan.description,
+          shortDescription: payload.shortDescription?.trim() ?? existingPlan.shortDescription,
+          longDescription: payload.longDescription?.trim() ?? existingPlan.longDescription,
+          isActive: payload.isActive ?? existingPlan.isActive,
+          sortOrder: payload.sortOrder ?? existingPlan.sortOrder,
+          basePriceCents: payload.basePriceCents ?? existingPlan.basePriceCents,
+          annualBasePriceCents:
+            payload.annualBasePriceCents === undefined ? existingPlan.annualBasePriceCents : payload.annualBasePriceCents,
+          setupFeeCents: payload.setupFeeCents === undefined ? existingPlan.setupFeeCents : payload.setupFeeCents,
+          trialDays: payload.trialDays === undefined ? existingPlan.trialDays : payload.trialDays,
+          activeClientPriceCents: payload.activeClientPriceCents ?? existingPlan.activeClientPriceCents,
+          clinicianPriceCents: payload.clinicianPriceCents ?? existingPlan.clinicianPriceCents,
+          includedActiveClients:
+            payload.includedActiveClients === undefined ? existingPlan.includedActiveClients : payload.includedActiveClients,
+          includedClinicians:
+            payload.includedClinicians === undefined ? existingPlan.includedClinicians : payload.includedClinicians,
+          currency: payload.currency?.toLowerCase() ?? existingPlan.currency,
+          billingInterval: payload.billingInterval ?? existingPlan.billingInterval,
+          targetCustomerProfile: payload.targetCustomerProfile?.trim() ?? existingPlan.targetCustomerProfile,
+          customPricingRequired: payload.customPricingRequired ?? existingPlan.customPricingRequired,
+          salesContactRequired: payload.salesContactRequired ?? existingPlan.salesContactRequired,
+          badgeLabel: payload.badgeLabel === undefined ? existingPlan.badgeLabel : normalizeOptionalString(payload.badgeLabel),
+          maxLocations: payload.maxLocations === undefined ? existingPlan.maxLocations : payload.maxLocations,
+          maxOrgUsers: payload.maxOrgUsers === undefined ? existingPlan.maxOrgUsers : payload.maxOrgUsers,
+          maxClinicians: payload.maxClinicians === undefined ? existingPlan.maxClinicians : payload.maxClinicians,
+          maxActiveClients: payload.maxActiveClients === undefined ? existingPlan.maxActiveClients : payload.maxActiveClients,
+          unlimitedLocations: payload.unlimitedLocations ?? existingPlan.unlimitedLocations,
+          unlimitedOrgUsers: payload.unlimitedOrgUsers ?? existingPlan.unlimitedOrgUsers,
+          unlimitedClinicians: payload.unlimitedClinicians ?? existingPlan.unlimitedClinicians,
+          unlimitedActiveClients: payload.unlimitedActiveClients ?? existingPlan.unlimitedActiveClients,
+          apiAccessIncluded: payload.apiAccessIncluded ?? existingPlan.apiAccessIncluded,
+          ssoIncluded: payload.ssoIncluded ?? existingPlan.ssoIncluded,
+          customBrandingIncluded: payload.customBrandingIncluded ?? existingPlan.customBrandingIncluded
+        }
+      });
+
+      if (payload.features) {
+        await syncPlanFeatureRows({
+          tx,
+          planId: existingPlan.id,
+          tenantId: access.tenantId,
+          features: payload.features
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          tenantId: access.tenantId,
+          userId: access.userId,
+          action: 'platform.plan.updated',
+          entityType: 'subscription_plan',
+          entityId: plan.id,
+          metadata: {
+            key: plan.key,
+            name: plan.name
+          }
+        }
+      });
+
+      return tx.subscriptionPlan.findUniqueOrThrow({
+        where: {
+          id: plan.id
+        },
+        include: {
+          planFeatures: {
+            include: {
+              feature: true
+            }
+          },
+          _count: {
+            select: {
+              organizationSubscriptions: true
+            }
+          }
+        }
+      });
+    });
+
+    return {
+      updated: true,
+      plan: serializePlan(updatedPlan)
     };
   });
 
@@ -684,6 +1050,122 @@ export async function platformRoutes(app: FastifyInstance) {
 
     return {
       features: features.map(serializeFeature)
+    };
+  });
+
+  app.patch('/v1/platform/features/:featureId', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+    const params = featureParamsSchema.parse(request.params);
+    const payload = featurePatchSchema.parse(request.body);
+
+    const existingFeature = await prisma.platformFeature.findFirst({
+      where: {
+        id: params.featureId,
+        tenantId: access.tenantId
+      }
+    });
+
+    if (!existingFeature) {
+      return reply.code(404).send({ message: 'Feature was not found.' });
+    }
+
+    const updatedFeature = await prisma.$transaction(async (tx) => {
+      const feature = await tx.platformFeature.update({
+        where: {
+          id: existingFeature.id
+        },
+        data: {
+          name: payload.name?.trim() ?? existingFeature.name,
+          description: payload.description?.trim() ?? existingFeature.description,
+          longDescription: payload.longDescription?.trim() ?? existingFeature.longDescription,
+          category: payload.category === undefined ? existingFeature.category : normalizeOptionalString(payload.category),
+          isActive: payload.isActive ?? existingFeature.isActive,
+          isAddOn: payload.isAddOn ?? existingFeature.isAddOn,
+          defaultMonthlyPriceCents:
+            payload.defaultMonthlyPriceCents === undefined
+              ? existingFeature.defaultMonthlyPriceCents
+              : payload.defaultMonthlyPriceCents,
+          defaultAnnualPriceCents:
+            payload.defaultAnnualPriceCents === undefined
+              ? existingFeature.defaultAnnualPriceCents
+              : payload.defaultAnnualPriceCents,
+          badgeLabel: payload.badgeLabel === undefined ? existingFeature.badgeLabel : normalizeOptionalString(payload.badgeLabel),
+          sortOrder: payload.sortOrder ?? existingFeature.sortOrder
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          tenantId: access.tenantId,
+          userId: access.userId,
+          action: 'platform.feature.updated',
+          entityType: 'platform_feature',
+          entityId: feature.id,
+          metadata: {
+            key: feature.key,
+            name: feature.name
+          }
+        }
+      });
+
+      return feature;
+    });
+
+    return {
+      updated: true,
+      feature: serializeFeature(updatedFeature)
+    };
+  });
+
+  app.get('/v1/platform/pricing/catalog', async (request) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsRead));
+
+    const [plans, features] = await Promise.all([
+      loadPlanCatalog(access.tenantId),
+      prisma.platformFeature.findMany({
+        where: {
+          tenantId: access.tenantId
+        },
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
+      })
+    ]);
+
+    return {
+      plans: plans.map(serializePlan),
+      features: features.map(serializeFeature),
+      defaults: {
+        planKeys: DEFAULT_PLAN_DEFINITIONS.map((plan) => plan.key)
+      }
+    };
+  });
+
+  app.post('/v1/platform/pricing/bootstrap', async (request) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+
+    const result = await prisma.$transaction(async (tx) => bootstrapDefaultPricingCatalog(tx, {
+      tenantId: access.tenantId
+    }));
+
+    await prisma.auditLog.create({
+      data: {
+        tenantId: access.tenantId,
+        userId: access.userId,
+        action: 'platform.pricing_catalog.bootstrapped',
+        entityType: 'pricing_catalog',
+        entityId: access.tenantId,
+        metadata: serializePricingBootstrapResult(result)
+      }
+    });
+
+    const plans = await loadPlanCatalog(access.tenantId);
+
+    return {
+      bootstrapped: true,
+      ...serializePricingBootstrapResult(result),
+      plans: plans.map(serializePlan)
     };
   });
 
@@ -825,17 +1307,25 @@ export async function platformRoutes(app: FastifyInstance) {
           status: payload.status,
           billingStatus: payload.billingStatus,
           basePriceCents: payload.basePriceCents,
+          annualBasePriceCents: payload.annualBasePriceCents ?? null,
+          setupFeeCents: payload.setupFeeCents ?? null,
           activeClientPriceCents: payload.activeClientPriceCents,
           clinicianPriceCents: payload.clinicianPriceCents,
+          includedActiveClients: payload.includedActiveClients ?? null,
+          includedClinicians: payload.includedClinicians ?? null,
           currency: payload.currency.toLowerCase(),
           billingInterval: payload.billingInterval,
           startsAt: parseOptionalDate(payload.startsAt) ?? new Date(),
+          trialStartsAt: parseOptionalDate(payload.trialStartsAt),
           trialEndsAt: parseOptionalDate(payload.trialEndsAt),
           currentPeriodStart: parseOptionalDate(payload.currentPeriodStart),
           currentPeriodEnd: parseOptionalDate(payload.currentPeriodEnd),
           canceledAt: parseOptionalDate(payload.canceledAt),
           billingProvider: normalizeOptionalString(payload.billingProvider),
           billingCustomerId: normalizeOptionalString(payload.billingCustomerId),
+          billingContactEmail: normalizeOptionalString(payload.billingContactEmail),
+          customPricingEnabled: payload.customPricingEnabled ?? false,
+          enterpriseManaged: payload.enterpriseManaged ?? false,
           notes: normalizeOptionalString(payload.notes)
         },
         include: {
@@ -860,7 +1350,9 @@ export async function platformRoutes(app: FastifyInstance) {
           metadata: {
             planId: subscription.planId,
             status: subscription.status,
-            billingStatus: subscription.billingStatus
+            billingStatus: subscription.billingStatus,
+            customPricingEnabled: subscription.customPricingEnabled,
+            enterpriseManaged: subscription.enterpriseManaged
           }
         }
       });
@@ -938,15 +1430,41 @@ export async function platformRoutes(app: FastifyInstance) {
           basePriceCents:
             payload.basePriceCents
             ?? (payload.planId !== undefined && plan ? plan.basePriceCents : currentSubscription.basePriceCents),
+          annualBasePriceCents:
+            payload.annualBasePriceCents !== undefined
+              ? payload.annualBasePriceCents
+              : payload.planId !== undefined && plan
+                ? plan.annualBasePriceCents
+                : currentSubscription.annualBasePriceCents,
+          setupFeeCents:
+            payload.setupFeeCents !== undefined
+              ? payload.setupFeeCents
+              : payload.planId !== undefined && plan
+                ? plan.setupFeeCents
+                : currentSubscription.setupFeeCents,
           activeClientPriceCents:
             payload.activeClientPriceCents
             ?? (payload.planId !== undefined && plan ? plan.activeClientPriceCents : currentSubscription.activeClientPriceCents),
           clinicianPriceCents:
             payload.clinicianPriceCents
             ?? (payload.planId !== undefined && plan ? plan.clinicianPriceCents : currentSubscription.clinicianPriceCents),
+          includedActiveClients:
+            payload.includedActiveClients !== undefined
+              ? payload.includedActiveClients
+              : payload.planId !== undefined && plan
+                ? plan.includedActiveClients
+                : currentSubscription.includedActiveClients,
+          includedClinicians:
+            payload.includedClinicians !== undefined
+              ? payload.includedClinicians
+              : payload.planId !== undefined && plan
+                ? plan.includedClinicians
+                : currentSubscription.includedClinicians,
           currency: payload.currency?.toLowerCase() ?? currentSubscription.currency,
           billingInterval: payload.billingInterval ?? currentSubscription.billingInterval,
           startsAt: payload.startsAt ? new Date(payload.startsAt) : currentSubscription.startsAt,
+          trialStartsAt:
+            payload.trialStartsAt === undefined ? currentSubscription.trialStartsAt : parseOptionalDate(payload.trialStartsAt),
           trialEndsAt: payload.trialEndsAt === undefined ? currentSubscription.trialEndsAt : parseOptionalDate(payload.trialEndsAt),
           currentPeriodStart:
             payload.currentPeriodStart === undefined
@@ -965,6 +1483,12 @@ export async function platformRoutes(app: FastifyInstance) {
             payload.billingCustomerId === undefined
               ? currentSubscription.billingCustomerId
               : normalizeOptionalString(payload.billingCustomerId),
+          billingContactEmail:
+            payload.billingContactEmail === undefined
+              ? currentSubscription.billingContactEmail
+              : normalizeOptionalString(payload.billingContactEmail),
+          customPricingEnabled: payload.customPricingEnabled ?? currentSubscription.customPricingEnabled,
+          enterpriseManaged: payload.enterpriseManaged ?? currentSubscription.enterpriseManaged,
           notes: payload.notes === undefined ? currentSubscription.notes : normalizeOptionalString(payload.notes)
         },
         include: {
@@ -989,7 +1513,9 @@ export async function platformRoutes(app: FastifyInstance) {
           metadata: {
             planId: subscription.planId,
             status: subscription.status,
-            billingStatus: subscription.billingStatus
+            billingStatus: subscription.billingStatus,
+            customPricingEnabled: subscription.customPricingEnabled,
+            enterpriseManaged: subscription.enterpriseManaged
           }
         }
       });
