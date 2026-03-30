@@ -102,6 +102,14 @@ enum PlanFeatureAvailability {
   excluded
 }
 
+enum OrganizationOnboardingStatus {
+  draft
+  in_progress
+  submitted
+  reviewed
+  active
+}
+
 enum AiActionType {
   recovery_coach
   journaling_assist
@@ -116,6 +124,7 @@ model Tenant {
   name                         String
   createdAt                    DateTime                      @default(now())
   organizations                Organization[]
+  organizationOnboardings      OrganizationOnboarding[]
   subscriptionPlans            SubscriptionPlan[]
   platformFeatures             PlatformFeature[]
   organizationSubscriptions    OrganizationSubscription[]
@@ -142,6 +151,7 @@ model Organization {
   slug                 String?
   npi                  String?
   taxId                String?
+  onboarding           OrganizationOnboarding?
   memberships          Membership[]
   locations            Location[]
   consumers            Consumer[]
@@ -198,6 +208,8 @@ model SubscriptionPlan {
   ssoIncluded               Boolean                    @default(false)
   customBrandingIncluded    Boolean                    @default(false)
   planFeatures              PlanFeature[]
+  recommendedOnboardings    OrganizationOnboarding[]   @relation("RecommendedOnboardingPlan")
+  selectedOnboardings       OrganizationOnboarding[]   @relation("SelectedOnboardingPlan")
   organizationSubscriptions OrganizationSubscription[]
   createdAt                 DateTime                   @default(now())
   updatedAt                 DateTime                   @updatedAt
@@ -285,6 +297,42 @@ model OrganizationSubscription {
 
   @@index([tenantId, status])
   @@index([planId])
+}
+
+model OrganizationOnboarding {
+  id                       String                       @id @default(cuid())
+  tenantId                 String
+  tenant                   Tenant                       @relation(fields: [tenantId], references: [id])
+  organizationId           String                       @unique
+  organization             Organization                 @relation(fields: [organizationId], references: [id])
+  status                   OrganizationOnboardingStatus @default(draft)
+  currentStep              String?
+  answers                  Json?
+  recommendation           Json?
+  recommendedPlanId        String?
+  recommendedPlan          SubscriptionPlan?            @relation("RecommendedOnboardingPlan", fields: [recommendedPlanId], references: [id])
+  selectedPlanId           String?
+  selectedPlan             SubscriptionPlan?            @relation("SelectedOnboardingPlan", fields: [selectedPlanId], references: [id])
+  recommendedFeatureKeys   Json?
+  selectedFeatureKeys      Json?
+  requiresImport           Boolean                      @default(false)
+  importTypes              Json?
+  sourceSystem             String?
+  sourceFormat             String?
+  migrationAssistRequested Boolean                      @default(false)
+  aiSummary                String?
+  aiExplanation            String?
+  aiMigrationRiskSummary   String?
+  adminReviewNotes         String?
+  submittedAt              DateTime?
+  reviewedAt               DateTime?
+  completedAt              DateTime?
+  createdAt                DateTime                     @default(now())
+  updatedAt                DateTime                     @updatedAt
+
+  @@index([tenantId, status, updatedAt])
+  @@index([recommendedPlanId])
+  @@index([selectedPlanId])
 }
 
 model OrganizationFeatureOverride {
