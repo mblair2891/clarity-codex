@@ -96,6 +96,12 @@ enum OrganizationInvoiceLineItemType {
   credit
 }
 
+enum PlanFeatureAvailability {
+  included
+  add_on
+  excluded
+}
+
 enum AiActionType {
   recovery_coach
   journaling_assist
@@ -162,13 +168,35 @@ model SubscriptionPlan {
   key                       String
   name                      String
   description               String?
+  shortDescription          String?
+  longDescription           String?
   isActive                  Boolean                    @default(true)
   sortOrder                 Int                        @default(0)
   basePriceCents            Int                        @default(0)
+  annualBasePriceCents      Int?
+  setupFeeCents             Int?
+  trialDays                 Int?
   activeClientPriceCents    Int                        @default(0)
   clinicianPriceCents       Int                        @default(0)
+  includedActiveClients     Int?
+  includedClinicians        Int?
   currency                  String                     @default("usd")
   billingInterval           String                     @default("month")
+  targetCustomerProfile     String?
+  customPricingRequired     Boolean                    @default(false)
+  salesContactRequired      Boolean                    @default(false)
+  badgeLabel                String?
+  maxLocations              Int?
+  maxOrgUsers               Int?
+  maxClinicians             Int?
+  maxActiveClients          Int?
+  unlimitedLocations        Boolean                    @default(false)
+  unlimitedOrgUsers         Boolean                    @default(false)
+  unlimitedClinicians       Boolean                    @default(false)
+  unlimitedActiveClients    Boolean                    @default(false)
+  apiAccessIncluded         Boolean                    @default(false)
+  ssoIncluded               Boolean                    @default(false)
+  customBrandingIncluded    Boolean                    @default(false)
   planFeatures              PlanFeature[]
   organizationSubscriptions OrganizationSubscription[]
   createdAt                 DateTime                   @default(now())
@@ -179,32 +207,41 @@ model SubscriptionPlan {
 }
 
 model PlatformFeature {
-  id                    String                        @id @default(cuid())
-  tenantId              String
-  tenant                Tenant                        @relation(fields: [tenantId], references: [id])
-  key                   String
-  name                  String
-  description           String?
-  category              String?
-  isActive              Boolean                       @default(true)
-  sortOrder             Int                           @default(0)
-  planFeatures          PlanFeature[]
-  organizationOverrides OrganizationFeatureOverride[]
-  createdAt             DateTime                      @default(now())
-  updatedAt             DateTime                      @updatedAt
+  id                       String                        @id @default(cuid())
+  tenantId                 String
+  tenant                   Tenant                        @relation(fields: [tenantId], references: [id])
+  key                      String
+  name                     String
+  description              String?
+  longDescription          String?
+  category                 String?
+  isActive                 Boolean                       @default(true)
+  isAddOn                  Boolean                       @default(false)
+  defaultMonthlyPriceCents Int?
+  defaultAnnualPriceCents  Int?
+  badgeLabel               String?
+  sortOrder                Int                           @default(0)
+  planFeatures             PlanFeature[]
+  organizationOverrides    OrganizationFeatureOverride[]
+  createdAt                DateTime                      @default(now())
+  updatedAt                DateTime                      @updatedAt
 
   @@unique([tenantId, key])
   @@index([tenantId, isActive, sortOrder])
 }
 
 model PlanFeature {
-  id        String           @id @default(cuid())
-  planId    String
-  featureId String
-  included  Boolean          @default(true)
-  plan      SubscriptionPlan @relation(fields: [planId], references: [id])
-  feature   PlatformFeature  @relation(fields: [featureId], references: [id])
-  createdAt DateTime         @default(now())
+  id                String                  @id @default(cuid())
+  planId            String
+  featureId         String
+  included          Boolean                 @default(true)
+  availability      PlanFeatureAvailability @default(included)
+  monthlyPriceCents Int?
+  annualPriceCents  Int?
+  notes             String?
+  plan              SubscriptionPlan        @relation(fields: [planId], references: [id])
+  feature           PlatformFeature         @relation(fields: [featureId], references: [id])
+  createdAt         DateTime                @default(now())
 
   @@unique([planId, featureId])
   @@index([featureId])
@@ -221,17 +258,25 @@ model OrganizationSubscription {
   status                 SubscriptionStatus          @default(draft)
   billingStatus          String                      @default("not_configured")
   basePriceCents         Int                         @default(0)
+  annualBasePriceCents   Int?
+  setupFeeCents          Int?
   activeClientPriceCents Int                         @default(0)
   clinicianPriceCents    Int                         @default(0)
+  includedActiveClients  Int?
+  includedClinicians     Int?
   currency               String                      @default("usd")
   billingInterval        String                      @default("month")
   startsAt               DateTime                    @default(now())
+  trialStartsAt          DateTime?
   trialEndsAt            DateTime?
   currentPeriodStart     DateTime?
   currentPeriodEnd       DateTime?
   canceledAt             DateTime?
   billingProvider        String?
   billingCustomerId      String?
+  billingContactEmail    String?
+  customPricingEnabled   Boolean                     @default(false)
+  enterpriseManaged      Boolean                     @default(false)
   notes                  String?
   usageSnapshots         OrganizationUsageSnapshot[]
   invoices               OrganizationInvoice[]

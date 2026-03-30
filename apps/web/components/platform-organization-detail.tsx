@@ -41,13 +41,22 @@ type SubscriptionFormState = {
   status: string;
   billingStatus: string;
   basePriceCents: string;
+  annualBasePriceCents: string;
+  setupFeeCents: string;
   activeClientPriceCents: string;
   clinicianPriceCents: string;
+  includedActiveClients: string;
+  includedClinicians: string;
   currency: string;
   billingInterval: string;
   startsAt: string;
+  trialStartsAt: string;
+  trialEndsAt: string;
   currentPeriodEnd: string;
+  billingContactEmail: string;
   notes: string;
+  customPricingEnabled: boolean;
+  enterpriseManaged: boolean;
 };
 
 type FeatureDraftState = Record<string, { enabled: boolean; reason: string }>;
@@ -66,6 +75,10 @@ function toDateInputValue(value: string | null) {
   return new Date(value).toISOString().slice(0, 10);
 }
 
+function stringifyOptionalNumber(value: number | null | undefined) {
+  return value === null || value === undefined ? '' : String(value);
+}
+
 function buildSubscriptionFormState(subscription: PlatformSubscriptionScaffold | null, plans: PlatformPlan[]) {
   const fallbackPlan = plans[0] ?? null;
 
@@ -74,14 +87,23 @@ function buildSubscriptionFormState(subscription: PlatformSubscriptionScaffold |
       planId: fallbackPlan?.id ?? '',
       status: 'draft',
       billingStatus: 'not_configured',
-      basePriceCents: String(fallbackPlan?.pricing.basePriceCents ?? 0),
-      activeClientPriceCents: String(fallbackPlan?.pricing.activeClientPriceCents ?? 0),
-      clinicianPriceCents: String(fallbackPlan?.pricing.clinicianPriceCents ?? 0),
+      basePriceCents: stringifyOptionalNumber(fallbackPlan?.pricing.basePriceCents ?? 0),
+      annualBasePriceCents: stringifyOptionalNumber(fallbackPlan?.pricing.annualBasePriceCents),
+      setupFeeCents: stringifyOptionalNumber(fallbackPlan?.pricing.setupFeeCents),
+      activeClientPriceCents: stringifyOptionalNumber(fallbackPlan?.pricing.activeClientPriceCents ?? 0),
+      clinicianPriceCents: stringifyOptionalNumber(fallbackPlan?.pricing.clinicianPriceCents ?? 0),
+      includedActiveClients: stringifyOptionalNumber(fallbackPlan?.pricing.includedActiveClients),
+      includedClinicians: stringifyOptionalNumber(fallbackPlan?.pricing.includedClinicians),
       currency: fallbackPlan?.pricing.currency ?? 'usd',
       billingInterval: fallbackPlan?.pricing.billingInterval ?? 'month',
       startsAt: '',
+      trialStartsAt: '',
+      trialEndsAt: '',
       currentPeriodEnd: '',
-      notes: ''
+      billingContactEmail: '',
+      notes: '',
+      customPricingEnabled: false,
+      enterpriseManaged: false
     };
   }
 
@@ -89,14 +111,23 @@ function buildSubscriptionFormState(subscription: PlatformSubscriptionScaffold |
     planId: subscription.planId ?? '',
     status: subscription.subscriptionStatus,
     billingStatus: subscription.billingStatus,
-    basePriceCents: String(subscription.basePriceCents),
-    activeClientPriceCents: String(subscription.activeClientPriceCents),
-    clinicianPriceCents: String(subscription.clinicianPriceCents),
+    basePriceCents: stringifyOptionalNumber(subscription.basePriceCents),
+    annualBasePriceCents: stringifyOptionalNumber(subscription.annualBasePriceCents),
+    setupFeeCents: stringifyOptionalNumber(subscription.setupFeeCents),
+    activeClientPriceCents: stringifyOptionalNumber(subscription.activeClientPriceCents),
+    clinicianPriceCents: stringifyOptionalNumber(subscription.clinicianPriceCents),
+    includedActiveClients: stringifyOptionalNumber(subscription.includedActiveClients),
+    includedClinicians: stringifyOptionalNumber(subscription.includedClinicians),
     currency: subscription.currency,
     billingInterval: subscription.billingInterval,
     startsAt: toDateInputValue(subscription.startsAt),
+    trialStartsAt: toDateInputValue(subscription.trialStartsAt),
+    trialEndsAt: toDateInputValue(subscription.trialEndsAt),
     currentPeriodEnd: toDateInputValue(subscription.currentPeriodEnd),
-    notes: subscription.notes ?? ''
+    billingContactEmail: subscription.billingContactEmail ?? '',
+    notes: subscription.notes ?? '',
+    customPricingEnabled: subscription.customPricingEnabled,
+    enterpriseManaged: subscription.enterpriseManaged
   };
 }
 
@@ -110,6 +141,11 @@ function buildFeatureDrafts(features: PlatformOrganizationFeature[]): FeatureDra
       }
     ])
   );
+}
+
+function parseOptionalNumber(value: string) {
+  const trimmed = value.trim();
+  return trimmed ? Number(trimmed) : null;
 }
 
 export function PlatformOrganizationDetail({ organizationId }: { organizationId: string }) {
@@ -143,7 +179,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
   const organization = detail?.organization ?? null;
   const locationOptions = organization?.locations.filter((location) => location.isActive) ?? [];
 
-  async function loadPlatformAdminData(token: string) {
+  async function loadManagedData(token: string) {
     if (!apiBaseUrl || !canManageBilling) {
       return;
     }
@@ -180,12 +216,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
     ];
 
     if (canManageBilling) {
-      loaders.push(loadPlatformAdminData(token));
-    } else {
-      setPlans([]);
-      setManagedSubscription(null);
-      setOrganizationFeatures([]);
-      setFeatureDrafts({});
+      loaders.push(loadManagedData(token));
     }
 
     Promise.all(loaders)
@@ -254,7 +285,6 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
 
       storeToken(response.token);
       const session = await fetchMe(apiBaseUrl, response.token);
-
       setMe(session);
       setSuccess('Support session started. Redirecting into the organization workspace.');
       router.replace(getLandingPathForSession(session));
@@ -287,14 +317,21 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
         status: subscriptionForm.status,
         billingStatus: subscriptionForm.billingStatus.trim(),
         basePriceCents: Number(subscriptionForm.basePriceCents || '0'),
+        annualBasePriceCents: parseOptionalNumber(subscriptionForm.annualBasePriceCents),
+        setupFeeCents: parseOptionalNumber(subscriptionForm.setupFeeCents),
         activeClientPriceCents: Number(subscriptionForm.activeClientPriceCents || '0'),
         clinicianPriceCents: Number(subscriptionForm.clinicianPriceCents || '0'),
+        includedActiveClients: parseOptionalNumber(subscriptionForm.includedActiveClients),
+        includedClinicians: parseOptionalNumber(subscriptionForm.includedClinicians),
         currency: subscriptionForm.currency.trim().toLowerCase() || 'usd',
         billingInterval: subscriptionForm.billingInterval.trim() || 'month',
         startsAt: subscriptionForm.startsAt ? new Date(`${subscriptionForm.startsAt}T00:00:00.000Z`).toISOString() : undefined,
-        currentPeriodEnd: subscriptionForm.currentPeriodEnd
-          ? new Date(`${subscriptionForm.currentPeriodEnd}T00:00:00.000Z`).toISOString()
-          : null,
+        trialStartsAt: subscriptionForm.trialStartsAt ? new Date(`${subscriptionForm.trialStartsAt}T00:00:00.000Z`).toISOString() : null,
+        trialEndsAt: subscriptionForm.trialEndsAt ? new Date(`${subscriptionForm.trialEndsAt}T00:00:00.000Z`).toISOString() : null,
+        currentPeriodEnd: subscriptionForm.currentPeriodEnd ? new Date(`${subscriptionForm.currentPeriodEnd}T00:00:00.000Z`).toISOString() : null,
+        billingContactEmail: subscriptionForm.billingContactEmail.trim() || null,
+        customPricingEnabled: subscriptionForm.customPricingEnabled,
+        enterpriseManaged: subscriptionForm.enterpriseManaged,
         notes: subscriptionForm.notes.trim() || null
       };
 
@@ -372,22 +409,18 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
         <div className="consumerHeroTop">
           <div>
             <p className="eyebrow">Organization detail</p>
-            <h2 className="consumerHeading" style={{ marginBottom: 8 }}>
-              {organization?.name ?? 'Loading organization'}
-            </h2>
+            <h2 className="consumerHeading" style={{ marginBottom: 8 }}>{organization?.name ?? 'Loading organization'}</h2>
             <p className="muted consumerLead">
-              Review identity, subscription configuration, effective feature entitlements, and support access from one control-plane record.
+              Review identity, subscription pricing, billing settings, and effective feature entitlements from one platform record.
             </p>
           </div>
           <div className="actionRow">
             <Link href="/platform" className="secondaryButton">
               Back to Platform Home
             </Link>
-            {canManageBilling ? (
-              <Link href="/platform/subscriptions" className="secondaryButton">
-                Subscription Queue
-              </Link>
-            ) : null}
+            <Link href="/platform/subscriptions" className="secondaryButton">
+              Subscription Queue
+            </Link>
             <Link href="/platform/support" className="secondaryButton">
               Support Tools
             </Link>
@@ -443,9 +476,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
               </article>
               <article className="supportPanel">
                 <strong>Lifecycle placeholder</strong>
-                <p className="muted" style={{ marginBottom: 0 }}>
-                  {detail?.lifecycle.note}
-                </p>
+                <p className="muted" style={{ marginBottom: 0 }}>{detail?.lifecycle.note}</p>
               </article>
             </div>
           ) : (
@@ -457,7 +488,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
           <div className="sectionHeaderRow">
             <div>
               <h2 className="sectionTitle">Subscription summary</h2>
-              <p className="muted">Base plan and hybrid pricing fields live here even before payment processor automation.</p>
+              <p className="muted">Real pricing and packaging now live on the organization subscription record.</p>
             </div>
           </div>
           {activeSubscription ? (
@@ -468,8 +499,11 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
                 <span className="muted">Billing: {activeSubscription.billingStatus}</span>
                 <span className="muted">
                   Base {formatMoney(activeSubscription.basePriceCents, activeSubscription.currency)}
-                  {' '}+ Active client {formatMoney(activeSubscription.activeClientPriceCents, activeSubscription.currency)}
-                  {' '}+ Clinician {formatMoney(activeSubscription.clinicianPriceCents, activeSubscription.currency)}
+                  {' '}• Annual {activeSubscription.annualBasePriceCents === null ? 'N/A' : formatMoney(activeSubscription.annualBasePriceCents, activeSubscription.currency)}
+                </span>
+                <span className="muted">
+                  Usage: {formatMoney(activeSubscription.activeClientPriceCents, activeSubscription.currency)} per active client
+                  {' '}• {formatMoney(activeSubscription.clinicianPriceCents, activeSubscription.currency)} per clinician
                 </span>
               </article>
             </div>
@@ -485,153 +519,149 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
             <div className="sectionHeaderRow">
               <div>
                 <h2 className="sectionTitle">Manage subscription</h2>
-                <p className="muted">Assign a plan, set pricing fields, and control the organization subscription status.</p>
+                <p className="muted">Assign a plan, set org-specific price overrides, and manage billing/trial fields.</p>
               </div>
             </div>
             <form onSubmit={handleSaveSubscription} className="consumerStack" style={{ gap: 16, marginTop: 16 }}>
-              <label className="fieldLabel">
-                Plan
-                <select
-                  className="inputField"
-                  value={subscriptionForm.planId}
-                  onChange={(event) => {
-                    const nextPlan = plans.find((plan) => plan.id === event.target.value) ?? null;
-                    setSubscriptionForm((current) => ({
-                      ...current,
-                      planId: event.target.value,
-                      basePriceCents: String(nextPlan?.pricing.basePriceCents ?? current.basePriceCents),
-                      activeClientPriceCents: String(nextPlan?.pricing.activeClientPriceCents ?? current.activeClientPriceCents),
-                      clinicianPriceCents: String(nextPlan?.pricing.clinicianPriceCents ?? current.clinicianPriceCents),
-                      currency: nextPlan?.pricing.currency ?? current.currency,
-                      billingInterval: nextPlan?.pricing.billingInterval ?? current.billingInterval
-                    }));
-                  }}
-                >
-                  <option value="">No assigned plan</option>
-                  {plans.map((plan) => (
-                    <option key={plan.id} value={plan.id}>
-                      {plan.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
               <div className="grid">
                 <label className="fieldLabel">
-                  Subscription status
+                  Plan
                   <select
                     className="inputField"
-                    value={subscriptionForm.status}
-                    onChange={(event) => setSubscriptionForm((current) => ({ ...current, status: event.target.value }))}
+                    value={subscriptionForm.planId}
+                    onChange={(event) => {
+                      const nextPlan = plans.find((plan) => plan.id === event.target.value) ?? null;
+                      setSubscriptionForm((current) => ({
+                        ...current,
+                        planId: event.target.value,
+                        basePriceCents: stringifyOptionalNumber(nextPlan?.pricing.basePriceCents ?? Number(current.basePriceCents || '0')),
+                        annualBasePriceCents: stringifyOptionalNumber(nextPlan?.pricing.annualBasePriceCents),
+                        setupFeeCents: stringifyOptionalNumber(nextPlan?.pricing.setupFeeCents),
+                        activeClientPriceCents: stringifyOptionalNumber(nextPlan?.pricing.activeClientPriceCents ?? Number(current.activeClientPriceCents || '0')),
+                        clinicianPriceCents: stringifyOptionalNumber(nextPlan?.pricing.clinicianPriceCents ?? Number(current.clinicianPriceCents || '0')),
+                        includedActiveClients: stringifyOptionalNumber(nextPlan?.pricing.includedActiveClients),
+                        includedClinicians: stringifyOptionalNumber(nextPlan?.pricing.includedClinicians),
+                        currency: nextPlan?.pricing.currency ?? current.currency,
+                        billingInterval: nextPlan?.pricing.billingInterval ?? current.billingInterval,
+                        enterpriseManaged: nextPlan?.customPricingRequired ?? current.enterpriseManaged,
+                        customPricingEnabled: nextPlan?.customPricingRequired ?? current.customPricingEnabled
+                      }));
+                    }}
                   >
-                    {['draft', 'trialing', 'active', 'past_due', 'suspended', 'canceled'].map((status) => (
-                      <option key={status} value={status}>
-                        {status.replaceAll('_', ' ')}
+                    <option value="">No assigned plan</option>
+                    {plans.map((plan) => (
+                      <option key={plan.id} value={plan.id}>
+                        {plan.name}
                       </option>
                     ))}
                   </select>
                 </label>
                 <label className="fieldLabel">
+                  Subscription status
+                  <select className="inputField" value={subscriptionForm.status} onChange={(event) => setSubscriptionForm((current) => ({ ...current, status: event.target.value }))}>
+                    {['draft', 'trialing', 'active', 'past_due', 'suspended', 'canceled'].map((status) => (
+                      <option key={status} value={status}>{status.replaceAll('_', ' ')}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="fieldLabel">
                   Billing status
-                  <input
-                    className="inputField"
-                    value={subscriptionForm.billingStatus}
-                    onChange={(event) => setSubscriptionForm((current) => ({ ...current, billingStatus: event.target.value }))}
-                  />
+                  <input className="inputField" value={subscriptionForm.billingStatus} onChange={(event) => setSubscriptionForm((current) => ({ ...current, billingStatus: event.target.value }))} />
                 </label>
               </div>
 
               <div className="grid">
                 <label className="fieldLabel">
-                  Base price (cents)
-                  <input
-                    type="number"
-                    min="0"
-                    className="inputField"
-                    value={subscriptionForm.basePriceCents}
-                    onChange={(event) => setSubscriptionForm((current) => ({ ...current, basePriceCents: event.target.value }))}
-                  />
+                  Monthly base price (cents)
+                  <input type="number" min="0" className="inputField" value={subscriptionForm.basePriceCents} onChange={(event) => setSubscriptionForm((current) => ({ ...current, basePriceCents: event.target.value }))} />
                 </label>
                 <label className="fieldLabel">
-                  Active client price (cents)
-                  <input
-                    type="number"
-                    min="0"
-                    className="inputField"
-                    value={subscriptionForm.activeClientPriceCents}
-                    onChange={(event) => setSubscriptionForm((current) => ({ ...current, activeClientPriceCents: event.target.value }))}
-                  />
+                  Annual base price (cents)
+                  <input type="number" min="0" className="inputField" value={subscriptionForm.annualBasePriceCents} onChange={(event) => setSubscriptionForm((current) => ({ ...current, annualBasePriceCents: event.target.value }))} />
                 </label>
                 <label className="fieldLabel">
-                  Clinician price (cents)
-                  <input
-                    type="number"
-                    min="0"
-                    className="inputField"
-                    value={subscriptionForm.clinicianPriceCents}
-                    onChange={(event) => setSubscriptionForm((current) => ({ ...current, clinicianPriceCents: event.target.value }))}
-                  />
+                  Setup fee (cents)
+                  <input type="number" min="0" className="inputField" value={subscriptionForm.setupFeeCents} onChange={(event) => setSubscriptionForm((current) => ({ ...current, setupFeeCents: event.target.value }))} />
                 </label>
               </div>
 
               <div className="grid">
+                <label className="fieldLabel">
+                  Per active client (cents)
+                  <input type="number" min="0" className="inputField" value={subscriptionForm.activeClientPriceCents} onChange={(event) => setSubscriptionForm((current) => ({ ...current, activeClientPriceCents: event.target.value }))} />
+                </label>
+                <label className="fieldLabel">
+                  Per clinician (cents)
+                  <input type="number" min="0" className="inputField" value={subscriptionForm.clinicianPriceCents} onChange={(event) => setSubscriptionForm((current) => ({ ...current, clinicianPriceCents: event.target.value }))} />
+                </label>
+                <label className="fieldLabel">
+                  Included active clients
+                  <input type="number" min="0" className="inputField" value={subscriptionForm.includedActiveClients} onChange={(event) => setSubscriptionForm((current) => ({ ...current, includedActiveClients: event.target.value }))} />
+                </label>
+                <label className="fieldLabel">
+                  Included clinicians
+                  <input type="number" min="0" className="inputField" value={subscriptionForm.includedClinicians} onChange={(event) => setSubscriptionForm((current) => ({ ...current, includedClinicians: event.target.value }))} />
+                </label>
+              </div>
+
+              <div className="grid">
+                <label className="fieldLabel">
+                  Starts at
+                  <input type="date" className="inputField" value={subscriptionForm.startsAt} onChange={(event) => setSubscriptionForm((current) => ({ ...current, startsAt: event.target.value }))} />
+                </label>
+                <label className="fieldLabel">
+                  Trial start
+                  <input type="date" className="inputField" value={subscriptionForm.trialStartsAt} onChange={(event) => setSubscriptionForm((current) => ({ ...current, trialStartsAt: event.target.value }))} />
+                </label>
+                <label className="fieldLabel">
+                  Trial end
+                  <input type="date" className="inputField" value={subscriptionForm.trialEndsAt} onChange={(event) => setSubscriptionForm((current) => ({ ...current, trialEndsAt: event.target.value }))} />
+                </label>
+                <label className="fieldLabel">
+                  Current period end
+                  <input type="date" className="inputField" value={subscriptionForm.currentPeriodEnd} onChange={(event) => setSubscriptionForm((current) => ({ ...current, currentPeriodEnd: event.target.value }))} />
+                </label>
+              </div>
+
+              <div className="grid">
+                <label className="fieldLabel">
+                  Billing contact email
+                  <input className="inputField" value={subscriptionForm.billingContactEmail} onChange={(event) => setSubscriptionForm((current) => ({ ...current, billingContactEmail: event.target.value }))} />
+                </label>
                 <label className="fieldLabel">
                   Currency
-                  <input
-                    className="inputField"
-                    value={subscriptionForm.currency}
-                    onChange={(event) => setSubscriptionForm((current) => ({ ...current, currency: event.target.value }))}
-                  />
+                  <input className="inputField" value={subscriptionForm.currency} onChange={(event) => setSubscriptionForm((current) => ({ ...current, currency: event.target.value }))} />
                 </label>
                 <label className="fieldLabel">
                   Billing interval
-                  <input
-                    className="inputField"
-                    value={subscriptionForm.billingInterval}
-                    onChange={(event) => setSubscriptionForm((current) => ({ ...current, billingInterval: event.target.value }))}
-                  />
-                </label>
-                <label className="fieldLabel">
-                  Starts at
-                  <input
-                    type="date"
-                    className="inputField"
-                    value={subscriptionForm.startsAt}
-                    onChange={(event) => setSubscriptionForm((current) => ({ ...current, startsAt: event.target.value }))}
-                  />
+                  <input className="inputField" value={subscriptionForm.billingInterval} onChange={(event) => setSubscriptionForm((current) => ({ ...current, billingInterval: event.target.value }))} />
                 </label>
               </div>
 
               <div className="grid">
                 <label className="fieldLabel">
-                  Current period end
-                  <input
-                    type="date"
-                    className="inputField"
-                    value={subscriptionForm.currentPeriodEnd}
-                    onChange={(event) => setSubscriptionForm((current) => ({ ...current, currentPeriodEnd: event.target.value }))}
-                  />
+                  <span className="muted">Custom pricing enabled</span>
+                  <input type="checkbox" checked={subscriptionForm.customPricingEnabled} onChange={(event) => setSubscriptionForm((current) => ({ ...current, customPricingEnabled: event.target.checked }))} />
                 </label>
                 <label className="fieldLabel">
-                  Notes
-                  <textarea
-                    className="inputField textareaField"
-                    value={subscriptionForm.notes}
-                    onChange={(event) => setSubscriptionForm((current) => ({ ...current, notes: event.target.value }))}
-                    placeholder="Optional billing or contract notes"
-                  />
+                  <span className="muted">Enterprise managed</span>
+                  <input type="checkbox" checked={subscriptionForm.enterpriseManaged} onChange={(event) => setSubscriptionForm((current) => ({ ...current, enterpriseManaged: event.target.checked }))} />
                 </label>
               </div>
 
+              <label className="fieldLabel">
+                Notes
+                <textarea className="inputField textareaField" value={subscriptionForm.notes} onChange={(event) => setSubscriptionForm((current) => ({ ...current, notes: event.target.value }))} />
+              </label>
+
               {selectedPlan ? (
-                <div className="supportPanel">
-                  <strong>{selectedPlan.name} defaults</strong>
+                <article className="supportPanel">
+                  <strong>{selectedPlan.name} plan profile</strong>
                   <p className="muted" style={{ marginBottom: 0 }}>
-                    Base {formatMoney(selectedPlan.pricing.basePriceCents, selectedPlan.pricing.currency)}
-                    {' '}• Active client {formatMoney(selectedPlan.pricing.activeClientPriceCents, selectedPlan.pricing.currency)}
-                    {' '}• Clinician {formatMoney(selectedPlan.pricing.clinicianPriceCents, selectedPlan.pricing.currency)}
+                    {selectedPlan.shortDescription}
+                    {' '}• {selectedPlan.customPricingRequired ? 'Custom pricing plan' : 'Standard pricing plan'}
                   </p>
-                </div>
+                </article>
               ) : null}
 
               <div className="actionRow">
@@ -646,7 +676,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
             <div className="sectionHeaderRow">
               <div>
                 <h2 className="sectionTitle">Effective feature access</h2>
-                <p className="muted">Plan-included modules can be overridden per organization without changing the shared plan catalog.</p>
+                <p className="muted">Plan-included features can still be overridden per organization.</p>
               </div>
             </div>
             <div className="timeline" style={{ marginTop: 16 }}>
@@ -662,19 +692,22 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
                       <div className="sectionHeaderRow">
                         <div>
                           <strong>{feature.name}</strong>
-                          <p className="muted" style={{ marginBottom: 0 }}>
-                            {feature.description ?? 'No feature description is available yet.'}
-                          </p>
+                          <p className="muted" style={{ marginBottom: 0 }}>{feature.description ?? feature.key}</p>
                         </div>
                         <div className="pillRow">
                           <span className={`statusPill ${draft.enabled ? 'success' : 'warning'}`}>
                             {draft.enabled ? 'enabled' : 'disabled'}
                           </span>
-                          <span className="statusPill neutral">
-                            {feature.includedInPlan ? 'included in plan' : 'not in plan'}
-                          </span>
+                          <span className="statusPill neutral">{feature.planAvailability.replaceAll('_', ' ')}</span>
                         </div>
                       </div>
+                      <span className="muted">
+                        {feature.planAvailability === 'add_on'
+                          ? `Plan add-on ${feature.planPricing?.monthlyPriceCents === null ? '' : formatMoney(feature.planPricing?.monthlyPriceCents ?? 0)}`
+                          : feature.includedInPlan
+                            ? 'Included by plan'
+                            : 'Not included by plan'}
+                      </span>
                       <label className="fieldLabel" style={{ marginTop: 12 }}>
                         <span className="muted">Enable for this organization</span>
                         <input
@@ -703,7 +736,6 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
                                 reason: event.target.value
                               }
                             }))}
-                          placeholder="Optional reason for enable/disable override"
                         />
                       </label>
                     </article>
@@ -720,14 +752,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
             </div>
           </article>
         </section>
-      ) : (
-        <section className="card">
-          <h2 className="sectionTitle">Subscription management</h2>
-          <p className="muted" style={{ marginBottom: 0 }}>
-            Subscription plans, pricing fields, and organization-level feature overrides are reserved for platform admins in the platform control plane.
-          </p>
-        </section>
-      )}
+      ) : null}
 
       <section className="adminPanelGrid">
         <article className="card">
@@ -741,37 +766,20 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
             <form onSubmit={handleStartSupport} className="consumerStack" style={{ gap: 16, marginTop: 16 }}>
               <label className="fieldLabel">
                 Location
-                <select
-                  className="inputField"
-                  value={supportForm.locationId}
-                  onChange={(event) => setSupportForm((current) => ({ ...current, locationId: event.target.value }))}
-                  disabled={!locationOptions.length}
-                >
+                <select className="inputField" value={supportForm.locationId} onChange={(event) => setSupportForm((current) => ({ ...current, locationId: event.target.value }))} disabled={!locationOptions.length}>
                   <option value="">All organization locations</option>
                   {locationOptions.map((location) => (
-                    <option key={location.id} value={location.id}>
-                      {location.name}
-                    </option>
+                    <option key={location.id} value={location.id}>{location.name}</option>
                   ))}
                 </select>
               </label>
               <label className="fieldLabel">
                 Reason
-                <textarea
-                  className="inputField textareaField"
-                  value={supportForm.reason}
-                  onChange={(event) => setSupportForm((current) => ({ ...current, reason: event.target.value }))}
-                  placeholder="Describe the support issue, org request, or investigation."
-                />
+                <textarea className="inputField textareaField" value={supportForm.reason} onChange={(event) => setSupportForm((current) => ({ ...current, reason: event.target.value }))} />
               </label>
               <label className="fieldLabel">
                 Ticket or reference
-                <input
-                  className="inputField"
-                  value={supportForm.ticketReference}
-                  onChange={(event) => setSupportForm((current) => ({ ...current, ticketReference: event.target.value }))}
-                  placeholder="Optional incident, ticket, or CRM reference"
-                />
+                <input className="inputField" value={supportForm.ticketReference} onChange={(event) => setSupportForm((current) => ({ ...current, ticketReference: event.target.value }))} />
               </label>
               <div className="actionRow">
                 <button type="submit" className="primaryButton" disabled={isStartingSupport}>
@@ -797,9 +805,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
                 <article key={admin.id} className="listItemCard">
                   <strong>{admin.fullName}</strong>
                   <span className="muted">{admin.email}</span>
-                  <span className={`statusPill ${admin.isActive ? 'success' : 'warning'}`}>
-                    {admin.isActive ? 'active' : 'inactive'}
-                  </span>
+                  <span className={`statusPill ${admin.isActive ? 'success' : 'warning'}`}>{admin.isActive ? 'active' : 'inactive'}</span>
                 </article>
               ))
             ) : (
@@ -823,9 +829,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
                 <article key={location.id} className="listItemCard">
                   <strong>{location.name}</strong>
                   <span className="muted">{location.timezone ?? 'Timezone not set'}</span>
-                  <span className={`statusPill ${location.isActive ? 'success' : 'warning'}`}>
-                    {location.isActive ? 'active' : 'inactive'}
-                  </span>
+                  <span className={`statusPill ${location.isActive ? 'success' : 'warning'}`}>{location.isActive ? 'active' : 'inactive'}</span>
                 </article>
               ))
             ) : (
