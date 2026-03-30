@@ -377,6 +377,196 @@ export type PlatformOrganizationDetailResponse = {
   };
 };
 
+export type PlatformOnboardingAnswers = {
+  organizationIdentity: {
+    organizationName: string;
+    displayName: string;
+    organizationType: string;
+    numberOfLocations: number;
+    primaryLocationAddress: string;
+    timezone: string;
+    npi: string;
+    taxId: string;
+    website: string;
+    primaryPhone: string;
+    primaryEmail: string;
+  };
+  primaryContacts: {
+    primaryAdminFullName: string;
+    primaryAdminEmail: string;
+    primaryAdminPhone: string;
+    billingContactName: string;
+    billingContactEmail: string;
+    clinicalLeadName: string;
+    clinicalLeadEmail: string;
+    technicalContactName: string;
+    technicalContactEmail: string;
+  };
+  operationalProfile: {
+    numberOfClinicians: number;
+    numberOfOrgAdminUsers: number;
+    approximateActiveClientCount: number;
+    expectedGrowthNext12Months: number;
+    billsInsurance: boolean;
+    billingModel: 'in_house' | 'outsourced' | 'not_applicable';
+    needsClaimsRemittanceWorkflows: boolean;
+    needsConsumerPortal: boolean;
+    needsAdvancedReporting: boolean;
+    needsMultiLocationManagement: boolean;
+    needsSso: boolean;
+    needsApiAccess: boolean;
+    needsCustomBranding: boolean;
+    needsPrioritySupport: boolean;
+    hasExistingDataToImport: boolean;
+  };
+  importMigration: {
+    needsDataImport: boolean;
+    dataTypes: string[];
+    sourceSystem: string;
+    sourceFormat: string;
+    wantsPlatformAssistance: boolean;
+  };
+};
+
+export type PlatformOnboardingRecommendation = {
+  recommendedPlanKey: string | null;
+  recommendedPlanId: string | null;
+  recommendedPlanName: string | null;
+  recommendedFeatureKeys: string[];
+  includedFeatureKeys: string[];
+  addOnFeatureKeys: string[];
+  reasons: string[];
+  flags: string[];
+  operationalHighlights: string[];
+  importComplexity: 'low' | 'medium' | 'high';
+  importSummary: string;
+  adminNotes: string[];
+};
+
+export type PlatformOrganizationOnboarding = {
+  id: string | null;
+  status: string;
+  currentStep: string | null;
+  answers: PlatformOnboardingAnswers;
+  recommendation: PlatformOnboardingRecommendation | null;
+  recommendedPlanId: string | null;
+  selectedPlanId: string | null;
+  recommendedFeatureKeys: string[];
+  selectedFeatureKeys: string[];
+  requiresImport: boolean;
+  importTypes: string[];
+  sourceSystem: string | null;
+  sourceFormat: string | null;
+  migrationAssistRequested: boolean;
+  aiSummary: string | null;
+  aiExplanation: string | null;
+  aiMigrationRiskSummary: string | null;
+  adminReviewNotes: string | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  completedAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type PlatformOrganizationOnboardingResponse = {
+  organization: {
+    id: string;
+    name: string;
+    slug: string | null;
+    npi: string | null;
+    taxId: string | null;
+    createdAt: string;
+    subscription: PlatformSubscriptionScaffold;
+    locations: Array<{
+      id: string;
+      name: string;
+      timezone: string | null;
+      isActive: boolean;
+    }>;
+  };
+  onboarding: PlatformOrganizationOnboarding;
+  catalog: {
+    plans: PlatformPlan[];
+    features: PlatformFeature[];
+  };
+};
+
+export type UpsertPlatformOrganizationOnboardingInput = {
+  status?: string;
+  currentStep?: string | null;
+  answers: PlatformOnboardingAnswers;
+  adminReviewNotes?: string | null;
+};
+
+export type PatchPlatformOrganizationOnboardingInput = {
+  status?: string;
+  currentStep?: string | null;
+  answers?: PlatformOnboardingAnswers;
+  selectedPlanId?: string | null;
+  selectedFeatureKeys?: string[];
+  adminReviewNotes?: string | null;
+};
+
+export type RecommendPlatformOrganizationOnboardingInput = {
+  answers: PlatformOnboardingAnswers;
+  currentStep?: string | null;
+};
+
+export type CompletePlatformOrganizationOnboardingInput = {
+  answers: PlatformOnboardingAnswers;
+  selectedPlanId: string;
+  selectedFeatureKeys: string[];
+  adminReviewNotes?: string | null;
+};
+
+export type UpsertPlatformOrganizationOnboardingResponse = {
+  created?: boolean;
+  updated?: true;
+  organization: {
+    id: string;
+    name: string;
+    slug: string | null;
+  };
+  onboarding: PlatformOrganizationOnboarding;
+};
+
+export type RecommendPlatformOrganizationOnboardingResponse = {
+  recommended: true;
+  organization: {
+    id: string;
+    name: string;
+    slug: string | null;
+  };
+  onboarding: PlatformOrganizationOnboarding;
+  recommendedPlan: PlatformPlan | null;
+  recommendedFeatures: PlatformFeature[];
+  ai: {
+    summary: string;
+    explanation: string;
+    migrationRiskSummary: string;
+    reviewNotes: string[];
+  };
+};
+
+export type CompletePlatformOrganizationOnboardingResponse = {
+  completed: true;
+  organization: {
+    id: string;
+    name: string;
+    slug: string | null;
+  };
+  onboarding: PlatformOrganizationOnboarding;
+  subscription: PlatformSubscriptionScaffold;
+  features: PlatformOrganizationFeature[];
+  ai: {
+    summary: string;
+    explanation: string;
+    migrationRiskSummary: string;
+    reviewNotes: string[];
+  };
+};
+
 export type PlatformOrganizationSubscriptionResponse = {
   organization: {
     id: string;
@@ -719,6 +909,98 @@ export async function fetchPlatformOrganizationDetail(apiBaseUrl: string, token:
       Authorization: `Bearer ${token}`
     }
   });
+}
+
+export async function fetchPlatformOrganizationOnboarding(apiBaseUrl: string, token: string, organizationId: string) {
+  return apiFetch<PlatformOrganizationOnboardingResponse>(
+    apiBaseUrl,
+    `/v1/platform/organizations/${organizationId}/onboarding`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }
+  );
+}
+
+export async function createPlatformOrganizationOnboarding(
+  apiBaseUrl: string,
+  token: string,
+  organizationId: string,
+  payload: UpsertPlatformOrganizationOnboardingInput
+) {
+  return apiFetch<UpsertPlatformOrganizationOnboardingResponse>(
+    apiBaseUrl,
+    `/v1/platform/organizations/${organizationId}/onboarding`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function updatePlatformOrganizationOnboarding(
+  apiBaseUrl: string,
+  token: string,
+  organizationId: string,
+  payload: PatchPlatformOrganizationOnboardingInput
+) {
+  return apiFetch<UpsertPlatformOrganizationOnboardingResponse>(
+    apiBaseUrl,
+    `/v1/platform/organizations/${organizationId}/onboarding`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function recommendPlatformOrganizationOnboarding(
+  apiBaseUrl: string,
+  token: string,
+  organizationId: string,
+  payload: RecommendPlatformOrganizationOnboardingInput
+) {
+  return apiFetch<RecommendPlatformOrganizationOnboardingResponse>(
+    apiBaseUrl,
+    `/v1/platform/organizations/${organizationId}/onboarding/recommend`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function completePlatformOrganizationOnboarding(
+  apiBaseUrl: string,
+  token: string,
+  organizationId: string,
+  payload: CompletePlatformOrganizationOnboardingInput
+) {
+  return apiFetch<CompletePlatformOrganizationOnboardingResponse>(
+    apiBaseUrl,
+    `/v1/platform/organizations/${organizationId}/onboarding/complete`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    }
+  );
 }
 
 export async function fetchPlatformOrganizationSubscription(apiBaseUrl: string, token: string, organizationId: string) {

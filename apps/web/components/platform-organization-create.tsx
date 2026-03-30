@@ -67,8 +67,8 @@ export function PlatformOrganizationCreatePage() {
         taxId: form.taxId.trim() || undefined
       });
 
-      setSuccess(`Created ${response.organization.name}. Redirecting to the organization detail page.`);
-      router.push(`/platform/organizations/${response.organization.id}`);
+      setSuccess(`Created ${response.organization.name}. Redirecting to the onboarding wizard.`);
+      router.push(`/platform/organizations/${response.organization.id}/onboarding`);
     } catch (actionError) {
       setError(handleApiError(actionError, 'Unable to create this organization.'));
     } finally {
@@ -187,11 +187,11 @@ export function PlatformOrganizationCreatePage() {
               </article>
               <article className="listItemCard">
                 <strong>Step 2</strong>
-                <span className="muted">Open the organization detail page to review counts, subscription scaffold, and support launch options.</span>
+                <span className="muted">Launch the organization onboarding wizard to capture profile details and generate a plan recommendation.</span>
               </article>
               <article className="listItemCard">
                 <strong>Step 3</strong>
-                <span className="muted">Assign the first org admin from the existing admin user management flow as a follow-up beta task.</span>
+                <span className="muted">Review the resulting subscription draft on the org detail page and assign the first org admin as a follow-up beta task.</span>
               </article>
             </div>
           </article>

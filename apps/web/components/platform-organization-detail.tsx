@@ -418,6 +418,9 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
             <Link href="/platform" className="secondaryButton">
               Back to Platform Home
             </Link>
+            <Link href={`/platform/organizations/${organizationId}/onboarding`} className="primaryButton">
+              Open Onboarding Wizard
+            </Link>
             <Link href="/platform/subscriptions" className="secondaryButton">
               Subscription Queue
             </Link>

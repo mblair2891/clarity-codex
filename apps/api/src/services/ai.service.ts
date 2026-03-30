@@ -7,6 +7,18 @@ export interface AiRequest {
   prompt: string;
 }
 
+export interface OnboardingRecommendationNarrativeRequest {
+  tenantId: string;
+  organizationName: string;
+  recommendedPlanName: string;
+  recommendedFeatureNames: string[];
+  reasons: string[];
+  importSummary: string;
+  importComplexity: 'low' | 'medium' | 'high';
+  flags: string[];
+  adminNotes: string[];
+}
+
 export class AiService {
   generate(request: AiRequest) {
     const blocked = /diagnos|how to use more|best way to get high|unsafe detox/i.test(request.prompt);
@@ -27,6 +39,38 @@ export class AiService {
         'Encourage connection with care team or support contacts when risk rises.',
         'Document AI-assisted output for human review when used clinically or financially.'
       ],
+      boundaries: aiBoundaries.required
+    };
+  }
+
+  generateOnboardingRecommendationNarrative(request: OnboardingRecommendationNarrativeRequest) {
+    const featureSummary = request.recommendedFeatureNames.length
+      ? request.recommendedFeatureNames.join(', ')
+      : 'the core Clarity modules';
+    const reasons = request.reasons.length
+      ? request.reasons.join(' ')
+      : `${request.recommendedPlanName} best matches the current operating profile.`;
+    const explanation =
+      `${request.organizationName} is best aligned to ${request.recommendedPlanName} based on the submitted staffing, scale, and workflow requirements. `
+      + `${reasons} Recommended modules and add-ons center on ${featureSummary}.`;
+    const migrationRiskSummary =
+      request.importComplexity === 'high'
+        ? `Migration risk is elevated. ${request.importSummary}`
+        : request.importComplexity === 'medium'
+          ? `Migration risk is moderate. ${request.importSummary}`
+          : `Migration risk is low. ${request.importSummary}`;
+    const reviewNotes = [
+      'AI guidance is advisory and should not finalize pricing without human review.',
+      ...request.flags,
+      ...request.adminNotes
+    ];
+
+    return {
+      blocked: false,
+      summary: `${request.recommendedPlanName} is the current best-fit package for ${request.organizationName}.`,
+      explanation,
+      migrationRiskSummary,
+      reviewNotes,
       boundaries: aiBoundaries.required
     };
   }
