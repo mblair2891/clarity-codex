@@ -4,6 +4,14 @@ import { z } from 'zod';
 import { requirePlatformRole } from '../lib/access/org-scope.js';
 import { permissions } from '../lib/access/permissions.js';
 import {
+  buildDefaultOnboardingAnswers,
+  buildDefaultSelectedFeatureKeys,
+  normalizeOnboardingAnswers,
+  recommendOrganizationOnboarding,
+  serializeOrganizationOnboarding,
+  type OrganizationOnboardingAnswers
+} from '../lib/platform-onboarding.js';
+import {
   bootstrapDefaultPricingCatalog,
   buildSubscriptionScaffold,
   DEFAULT_PLAN_DEFINITIONS,
@@ -15,6 +23,7 @@ import {
 } from '../lib/platform-subscriptions.js';
 import { requireRoutePermission } from '../lib/access/route-permissions.js';
 import { prisma } from '../lib/db.js';
+import { AiService } from '../services/ai.service.js';
 import { ResetSystemService } from '../services/reset-system.service.js';
 
 const organizationParamsSchema = z.object({
@@ -148,6 +157,87 @@ const featureOverridesPatchSchema = z.object({
   ).min(1)
 });
 
+const onboardingStatusSchema = z.enum(['draft', 'in_progress', 'submitted', 'reviewed', 'active']);
+const onboardingImportDataTypeSchema = z.string().trim().min(1).max(80);
+const onboardingAnswersSchema = z.object({
+  organizationIdentity: z.object({
+    organizationName: z.string().trim().min(2).max(120),
+    displayName: z.string().trim().max(120),
+    organizationType: z.string().trim().max(80),
+    numberOfLocations: z.number().int().min(1).max(999),
+    primaryLocationAddress: z.string().trim().max(500),
+    timezone: z.string().trim().max(80),
+    npi: z.string().trim().max(20),
+    taxId: z.string().trim().max(20),
+    website: z.string().trim().max(240),
+    primaryPhone: z.string().trim().max(40),
+    primaryEmail: z.string().trim().email().max(191).or(z.literal(''))
+  }),
+  primaryContacts: z.object({
+    primaryAdminFullName: z.string().trim().max(120),
+    primaryAdminEmail: z.string().trim().email().max(191).or(z.literal('')),
+    primaryAdminPhone: z.string().trim().max(40),
+    billingContactName: z.string().trim().max(120),
+    billingContactEmail: z.string().trim().email().max(191).or(z.literal('')),
+    clinicalLeadName: z.string().trim().max(120),
+    clinicalLeadEmail: z.string().trim().email().max(191).or(z.literal('')),
+    technicalContactName: z.string().trim().max(120),
+    technicalContactEmail: z.string().trim().email().max(191).or(z.literal(''))
+  }),
+  operationalProfile: z.object({
+    numberOfClinicians: z.number().int().min(0).max(10_000),
+    numberOfOrgAdminUsers: z.number().int().min(0).max(10_000),
+    approximateActiveClientCount: z.number().int().min(0).max(1_000_000),
+    expectedGrowthNext12Months: z.number().int().min(0).max(1_000),
+    billsInsurance: z.boolean(),
+    billingModel: z.enum(['in_house', 'outsourced', 'not_applicable']),
+    needsClaimsRemittanceWorkflows: z.boolean(),
+    needsConsumerPortal: z.boolean(),
+    needsAdvancedReporting: z.boolean(),
+    needsMultiLocationManagement: z.boolean(),
+    needsSso: z.boolean(),
+    needsApiAccess: z.boolean(),
+    needsCustomBranding: z.boolean(),
+    needsPrioritySupport: z.boolean(),
+    hasExistingDataToImport: z.boolean()
+  }),
+  importMigration: z.object({
+    needsDataImport: z.boolean(),
+    dataTypes: z.array(onboardingImportDataTypeSchema).max(20),
+    sourceSystem: z.string().trim().max(120),
+    sourceFormat: z.string().trim().max(120),
+    wantsPlatformAssistance: z.boolean()
+  })
+});
+
+const onboardingCreateSchema = z.object({
+  status: onboardingStatusSchema.optional(),
+  currentStep: z.string().trim().min(1).max(40).nullable().optional(),
+  answers: onboardingAnswersSchema,
+  adminReviewNotes: z.string().trim().max(2_000).nullable().optional()
+});
+
+const onboardingPatchSchema = z.object({
+  status: onboardingStatusSchema.optional(),
+  currentStep: z.string().trim().min(1).max(40).nullable().optional(),
+  answers: onboardingAnswersSchema.optional(),
+  selectedPlanId: z.string().min(1).nullable().optional(),
+  selectedFeatureKeys: z.array(z.string().trim().min(1).max(80)).optional(),
+  adminReviewNotes: z.string().trim().max(2_000).nullable().optional()
+});
+
+const onboardingRecommendSchema = z.object({
+  answers: onboardingAnswersSchema,
+  currentStep: z.string().trim().min(1).max(40).nullable().optional()
+});
+
+const onboardingCompleteSchema = z.object({
+  answers: onboardingAnswersSchema,
+  selectedPlanId: z.string().min(1),
+  selectedFeatureKeys: z.array(z.string().trim().min(1).max(80)).max(100),
+  adminReviewNotes: z.string().trim().max(2_000).nullable().optional()
+});
+
 type LoadedOrganization = Awaited<ReturnType<typeof loadOrganizations>>[number];
 
 function normalizeOptionalString(value?: string | null) {
@@ -197,6 +287,10 @@ function normalizePlanKey(value: string) {
   return value.trim().toLowerCase();
 }
 
+function asJson(value: unknown): Prisma.InputJsonValue {
+  return value as Prisma.InputJsonValue;
+}
+
 function serializePricingBootstrapResult(result: Awaited<ReturnType<typeof bootstrapDefaultPricingCatalog>>) {
   return {
     seededPlans: result.plans.map((plan) => plan.key),
@@ -223,6 +317,151 @@ async function loadPlanCatalog(tenantId: string) {
     },
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
   });
+}
+
+async function loadPlatformFeaturesCatalog(tenantId: string) {
+  return prisma.platformFeature.findMany({
+    where: {
+      tenantId
+    },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
+  });
+}
+
+async function loadOrganizationForOnboarding(tenantId: string, organizationId: string) {
+  return prisma.organization.findFirst({
+    where: {
+      tenantId,
+      id: organizationId
+    },
+    include: {
+      locations: {
+        orderBy: {
+          createdAt: 'asc'
+        }
+      },
+      onboarding: {
+        include: {
+          recommendedPlan: {
+            select: {
+              id: true
+            }
+          },
+          selectedPlan: {
+            select: {
+              id: true
+            }
+          }
+        }
+      },
+      subscription: {
+        include: {
+          plan: {
+            select: {
+              id: true,
+              key: true,
+              name: true
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+function buildSubscriptionDataFromPlan(plan: Awaited<ReturnType<typeof loadPlanCatalog>>[number]) {
+  return {
+    planId: plan.id,
+    status: 'draft' as const,
+    billingStatus: 'not_configured',
+    basePriceCents: plan.basePriceCents,
+    annualBasePriceCents: plan.annualBasePriceCents,
+    setupFeeCents: plan.setupFeeCents,
+    activeClientPriceCents: plan.activeClientPriceCents,
+    clinicianPriceCents: plan.clinicianPriceCents,
+    includedActiveClients: plan.includedActiveClients,
+    includedClinicians: plan.includedClinicians,
+    currency: plan.currency,
+    billingInterval: plan.billingInterval,
+    customPricingEnabled: plan.customPricingRequired,
+    enterpriseManaged: plan.customPricingRequired,
+    startsAt: new Date()
+  };
+}
+
+function sanitizeFeatureKeySelection(keys: string[]) {
+  return [...new Set(keys.map((key) => key.trim()).filter(Boolean))].sort();
+}
+
+async function syncOnboardingFeatureSelection(args: {
+  tx: Prisma.TransactionClient;
+  tenantId: string;
+  organizationId: string;
+  userId: string;
+  plan: Awaited<ReturnType<typeof loadPlanCatalog>>[number];
+  features: Awaited<ReturnType<typeof loadPlatformFeaturesCatalog>>;
+  selectedFeatureKeys: string[];
+}) {
+  const selectedKeys = new Set(args.selectedFeatureKeys);
+  const planAvailabilityByFeatureId = new Map(
+    args.plan.planFeatures.map((planFeature) => [planFeature.featureId, planFeature.availability])
+  );
+  const existingOverrides = await args.tx.organizationFeatureOverride.findMany({
+    where: {
+      tenantId: args.tenantId,
+      organizationId: args.organizationId
+    }
+  });
+  const existingOverrideByFeatureId = new Map(existingOverrides.map((override) => [override.featureId, override]));
+
+  for (const feature of args.features) {
+    const availability = planAvailabilityByFeatureId.get(feature.id) ?? 'excluded';
+    const defaultEnabled = availability === 'included';
+    const selected = selectedKeys.has(feature.key);
+    const existingOverride = existingOverrideByFeatureId.get(feature.id) ?? null;
+
+    if (selected === defaultEnabled) {
+      if (existingOverride) {
+        await args.tx.organizationFeatureOverride.delete({
+          where: {
+            id: existingOverride.id
+          }
+        });
+      }
+
+      continue;
+    }
+
+    const reason = selected
+      ? 'Enabled from onboarding wizard recommendation or platform admin confirmation.'
+      : 'Disabled during onboarding wizard review.';
+
+    if (existingOverride) {
+      await args.tx.organizationFeatureOverride.update({
+        where: {
+          id: existingOverride.id
+        },
+        data: {
+          enabled: selected,
+          reason,
+          updatedByUserId: args.userId
+        }
+      });
+      continue;
+    }
+
+    await args.tx.organizationFeatureOverride.create({
+      data: {
+        tenantId: args.tenantId,
+        organizationId: args.organizationId,
+        featureId: feature.id,
+        enabled: selected,
+        reason,
+        createdByUserId: args.userId,
+        updatedByUserId: args.userId
+      }
+    });
+  }
 }
 
 async function syncPlanFeatureRows(args: {
@@ -484,6 +723,7 @@ function serializeOrganizationSummary(
 
 export async function platformRoutes(app: FastifyInstance) {
   const resetSystemService = new ResetSystemService(app.log);
+  const aiService = new AiService();
 
   app.get('/v1/platform/dashboard', async (request) => {
     await app.authenticateRequest(request);
@@ -795,6 +1035,647 @@ export async function platformRoutes(app: FastifyInstance) {
       lifecycle: {
         status: 'active',
         note: 'Organization lifecycle controls are scaffolded for beta. Provisioning, suspension, and archival workflows can land here next.'
+      }
+    };
+  });
+
+  app.get('/v1/platform/organizations/:organizationId/onboarding', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+    const params = organizationParamsSchema.parse(request.params);
+
+    const [organization, plans, features] = await Promise.all([
+      loadOrganizationForOnboarding(access.tenantId, params.organizationId),
+      loadPlanCatalog(access.tenantId),
+      loadPlatformFeaturesCatalog(access.tenantId)
+    ]);
+
+    if (!organization) {
+      return reply.code(404).send({
+        message: 'Organization was not found.'
+      });
+    }
+
+    const onboarding = serializeOrganizationOnboarding(organization.onboarding);
+    const hydratedAnswers = normalizeOnboardingAnswers({
+      ...onboarding.answers,
+      organizationIdentity: {
+        ...onboarding.answers.organizationIdentity,
+        organizationName: onboarding.answers.organizationIdentity.organizationName || organization.name,
+        displayName: onboarding.answers.organizationIdentity.displayName || organization.name,
+        numberOfLocations:
+          onboarding.answers.organizationIdentity.numberOfLocations || Math.max(organization.locations.length, 1),
+        timezone: onboarding.answers.organizationIdentity.timezone || organization.locations[0]?.timezone || '',
+        npi: onboarding.answers.organizationIdentity.npi || organization.npi || '',
+        taxId: onboarding.answers.organizationIdentity.taxId || organization.taxId || ''
+      }
+    });
+    const selectedPlanId = onboarding.selectedPlanId ?? onboarding.recommendedPlanId ?? organization.subscription?.planId ?? null;
+    const selectedPlan = plans.find((plan) => plan.id === selectedPlanId) ?? null;
+    const selectedFeatureKeys = onboarding.selectedFeatureKeys.length
+      ? onboarding.selectedFeatureKeys
+      : buildDefaultSelectedFeatureKeys({
+          plan: selectedPlan,
+          recommendedFeatureKeys: onboarding.recommendedFeatureKeys
+        });
+
+    return {
+      organization: {
+        id: organization.id,
+        name: organization.name,
+        slug: organization.slug,
+        npi: organization.npi,
+        taxId: organization.taxId,
+        createdAt: organization.createdAt.toISOString(),
+        subscription: serializeSubscriptionSummary(organization.subscription),
+        locations: organization.locations.map((location) => ({
+          id: location.id,
+          name: location.name,
+          timezone: location.timezone,
+          isActive: location.isActive
+        }))
+      },
+      onboarding: {
+        ...onboarding,
+        answers: hydratedAnswers,
+        selectedPlanId,
+        selectedFeatureKeys
+      },
+      catalog: {
+        plans: plans.map(serializePlan),
+        features: features.map(serializeFeature)
+      }
+    };
+  });
+
+  app.post('/v1/platform/organizations/:organizationId/onboarding', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+    const params = organizationParamsSchema.parse(request.params);
+    const payload = onboardingCreateSchema.parse(request.body);
+
+    const organization = await loadOrganizationForOnboarding(access.tenantId, params.organizationId);
+
+    if (!organization) {
+      return reply.code(404).send({
+        message: 'Organization was not found.'
+      });
+    }
+
+    const answers = normalizeOnboardingAnswers(payload.answers as OrganizationOnboardingAnswers);
+    const existing = organization.onboarding;
+    const saved = await prisma.$transaction(async (tx) => {
+      const onboardingRecord = await tx.organizationOnboarding.upsert({
+        where: {
+          organizationId: organization.id
+        },
+        update: {
+          status: payload.status ?? existing?.status ?? 'in_progress',
+          currentStep: payload.currentStep ?? existing?.currentStep ?? 'organization_identity',
+          answers: asJson(answers),
+          requiresImport: answers.importMigration.needsDataImport || answers.operationalProfile.hasExistingDataToImport,
+          importTypes: asJson(answers.importMigration.dataTypes),
+          sourceSystem: normalizeOptionalString(answers.importMigration.sourceSystem),
+          sourceFormat: normalizeOptionalString(answers.importMigration.sourceFormat),
+          migrationAssistRequested: answers.importMigration.wantsPlatformAssistance,
+          adminReviewNotes:
+            payload.adminReviewNotes === undefined ? existing?.adminReviewNotes ?? null : normalizeOptionalString(payload.adminReviewNotes)
+        },
+        create: {
+          tenantId: access.tenantId,
+          organizationId: organization.id,
+          status: payload.status ?? 'in_progress',
+          currentStep: payload.currentStep ?? 'organization_identity',
+          answers: asJson(answers),
+          requiresImport: answers.importMigration.needsDataImport || answers.operationalProfile.hasExistingDataToImport,
+          importTypes: asJson(answers.importMigration.dataTypes),
+          sourceSystem: normalizeOptionalString(answers.importMigration.sourceSystem),
+          sourceFormat: normalizeOptionalString(answers.importMigration.sourceFormat),
+          migrationAssistRequested: answers.importMigration.wantsPlatformAssistance,
+          adminReviewNotes: normalizeOptionalString(payload.adminReviewNotes)
+        },
+        include: {
+          recommendedPlan: {
+            select: {
+              id: true
+            }
+          },
+          selectedPlan: {
+            select: {
+              id: true
+            }
+          }
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          tenantId: access.tenantId,
+          userId: access.userId,
+          organizationId: organization.id,
+          action: 'platform.organization_onboarding.saved',
+          entityType: 'organization_onboarding',
+          entityId: onboardingRecord.id,
+          metadata: {
+            status: onboardingRecord.status,
+            currentStep: onboardingRecord.currentStep
+          }
+        }
+      });
+
+      return onboardingRecord;
+    });
+
+    return reply.code(existing ? 200 : 201).send({
+      created: !existing,
+      organization: {
+        id: organization.id,
+        name: organization.name,
+        slug: organization.slug
+      },
+      onboarding: serializeOrganizationOnboarding(saved)
+    });
+  });
+
+  app.patch('/v1/platform/organizations/:organizationId/onboarding', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+    const params = organizationParamsSchema.parse(request.params);
+    const payload = onboardingPatchSchema.parse(request.body);
+
+    const organization = await loadOrganizationForOnboarding(access.tenantId, params.organizationId);
+
+    if (!organization) {
+      return reply.code(404).send({
+        message: 'Organization was not found.'
+      });
+    }
+
+    const existingAnswers = serializeOrganizationOnboarding(organization.onboarding).answers;
+    const answers = payload.answers
+      ? normalizeOnboardingAnswers(payload.answers as OrganizationOnboardingAnswers)
+      : existingAnswers;
+    const saved = await prisma.$transaction(async (tx) => {
+      const onboardingRecord = await tx.organizationOnboarding.upsert({
+        where: {
+          organizationId: organization.id
+        },
+        update: {
+          status: payload.status ?? organization.onboarding?.status ?? 'in_progress',
+          currentStep:
+            payload.currentStep === undefined
+              ? organization.onboarding?.currentStep ?? null
+              : normalizeOptionalString(payload.currentStep),
+          answers: asJson(answers),
+          selectedPlanId: payload.selectedPlanId === undefined ? organization.onboarding?.selectedPlanId ?? null : payload.selectedPlanId,
+          selectedFeatureKeys:
+            payload.selectedFeatureKeys === undefined
+              ? organization.onboarding?.selectedFeatureKeys ?? undefined
+              : asJson(sanitizeFeatureKeySelection(payload.selectedFeatureKeys)),
+          requiresImport: answers.importMigration.needsDataImport || answers.operationalProfile.hasExistingDataToImport,
+          importTypes: asJson(answers.importMigration.dataTypes),
+          sourceSystem: normalizeOptionalString(answers.importMigration.sourceSystem),
+          sourceFormat: normalizeOptionalString(answers.importMigration.sourceFormat),
+          migrationAssistRequested: answers.importMigration.wantsPlatformAssistance,
+          adminReviewNotes:
+            payload.adminReviewNotes === undefined
+              ? organization.onboarding?.adminReviewNotes ?? null
+              : normalizeOptionalString(payload.adminReviewNotes)
+        },
+        create: {
+          tenantId: access.tenantId,
+          organizationId: organization.id,
+          status: payload.status ?? 'in_progress',
+          currentStep: normalizeOptionalString(payload.currentStep) ?? 'organization_identity',
+          answers: asJson(answers),
+          selectedPlanId: payload.selectedPlanId ?? null,
+          selectedFeatureKeys: asJson(sanitizeFeatureKeySelection(payload.selectedFeatureKeys ?? [])),
+          requiresImport: answers.importMigration.needsDataImport || answers.operationalProfile.hasExistingDataToImport,
+          importTypes: asJson(answers.importMigration.dataTypes),
+          sourceSystem: normalizeOptionalString(answers.importMigration.sourceSystem),
+          sourceFormat: normalizeOptionalString(answers.importMigration.sourceFormat),
+          migrationAssistRequested: answers.importMigration.wantsPlatformAssistance,
+          adminReviewNotes: normalizeOptionalString(payload.adminReviewNotes)
+        },
+        include: {
+          recommendedPlan: {
+            select: {
+              id: true
+            }
+          },
+          selectedPlan: {
+            select: {
+              id: true
+            }
+          }
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          tenantId: access.tenantId,
+          userId: access.userId,
+          organizationId: organization.id,
+          action: 'platform.organization_onboarding.updated',
+          entityType: 'organization_onboarding',
+          entityId: onboardingRecord.id,
+          metadata: {
+            status: onboardingRecord.status,
+            currentStep: onboardingRecord.currentStep
+          }
+        }
+      });
+
+      return onboardingRecord;
+    });
+
+    return {
+      updated: true,
+      organization: {
+        id: organization.id,
+        name: organization.name,
+        slug: organization.slug
+      },
+      onboarding: serializeOrganizationOnboarding(saved)
+    };
+  });
+
+  app.post('/v1/platform/organizations/:organizationId/onboarding/recommend', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+    const params = organizationParamsSchema.parse(request.params);
+    const payload = onboardingRecommendSchema.parse(request.body);
+
+    const [organization, plans, features] = await Promise.all([
+      loadOrganizationForOnboarding(access.tenantId, params.organizationId),
+      loadPlanCatalog(access.tenantId),
+      loadPlatformFeaturesCatalog(access.tenantId)
+    ]);
+
+    if (!organization) {
+      return reply.code(404).send({
+        message: 'Organization was not found.'
+      });
+    }
+
+    if (!plans.length) {
+      return reply.code(409).send({
+        message: 'No subscription plans are configured for this tenant yet.'
+      });
+    }
+
+    const answers = normalizeOnboardingAnswers(payload.answers as OrganizationOnboardingAnswers);
+    const recommendation = recommendOrganizationOnboarding({
+      plans,
+      features,
+      answers
+    });
+    const recommendedPlan = plans.find((plan) => plan.id === recommendation.recommendedPlanId) ?? null;
+    const recommendedFeatureNames = features
+      .filter((feature) => recommendation.recommendedFeatureKeys.includes(feature.key))
+      .map((feature) => feature.name);
+    const aiNarrative = aiService.generateOnboardingRecommendationNarrative({
+      tenantId: access.tenantId,
+      organizationName: answers.organizationIdentity.displayName || answers.organizationIdentity.organizationName || organization.name,
+      recommendedPlanName: recommendation.recommendedPlanName ?? recommendedPlan?.name ?? 'Clarity',
+      recommendedFeatureNames,
+      reasons: recommendation.reasons,
+      importSummary: recommendation.importSummary,
+      importComplexity: recommendation.importComplexity,
+      flags: recommendation.flags,
+      adminNotes: recommendation.adminNotes
+    });
+    const defaultSelectedFeatureKeys = buildDefaultSelectedFeatureKeys({
+      plan: recommendedPlan,
+      recommendedFeatureKeys: recommendation.recommendedFeatureKeys
+    });
+    const saved = await prisma.$transaction(async (tx) => {
+      const onboardingRecord = await tx.organizationOnboarding.upsert({
+        where: {
+          organizationId: organization.id
+        },
+        update: {
+          status: 'submitted',
+          currentStep: payload.currentStep ?? 'recommendation',
+          answers: asJson(answers),
+          recommendation: asJson(recommendation),
+          recommendedPlanId: recommendation.recommendedPlanId,
+          selectedPlanId: organization.onboarding?.selectedPlanId ?? recommendation.recommendedPlanId,
+          recommendedFeatureKeys: asJson(recommendation.recommendedFeatureKeys),
+          selectedFeatureKeys:
+            organization.onboarding?.selectedFeatureKeys && Array.isArray(organization.onboarding.selectedFeatureKeys)
+              ? organization.onboarding.selectedFeatureKeys
+              : asJson(defaultSelectedFeatureKeys),
+          requiresImport: answers.importMigration.needsDataImport || answers.operationalProfile.hasExistingDataToImport,
+          importTypes: asJson(answers.importMigration.dataTypes),
+          sourceSystem: normalizeOptionalString(answers.importMigration.sourceSystem),
+          sourceFormat: normalizeOptionalString(answers.importMigration.sourceFormat),
+          migrationAssistRequested: answers.importMigration.wantsPlatformAssistance,
+          aiSummary: aiNarrative.summary,
+          aiExplanation: aiNarrative.explanation,
+          aiMigrationRiskSummary: aiNarrative.migrationRiskSummary,
+          submittedAt: new Date()
+        },
+        create: {
+          tenantId: access.tenantId,
+          organizationId: organization.id,
+          status: 'submitted',
+          currentStep: payload.currentStep ?? 'recommendation',
+          answers: asJson(answers),
+          recommendation: asJson(recommendation),
+          recommendedPlanId: recommendation.recommendedPlanId,
+          selectedPlanId: recommendation.recommendedPlanId,
+          recommendedFeatureKeys: asJson(recommendation.recommendedFeatureKeys),
+          selectedFeatureKeys: asJson(defaultSelectedFeatureKeys),
+          requiresImport: answers.importMigration.needsDataImport || answers.operationalProfile.hasExistingDataToImport,
+          importTypes: asJson(answers.importMigration.dataTypes),
+          sourceSystem: normalizeOptionalString(answers.importMigration.sourceSystem),
+          sourceFormat: normalizeOptionalString(answers.importMigration.sourceFormat),
+          migrationAssistRequested: answers.importMigration.wantsPlatformAssistance,
+          aiSummary: aiNarrative.summary,
+          aiExplanation: aiNarrative.explanation,
+          aiMigrationRiskSummary: aiNarrative.migrationRiskSummary,
+          submittedAt: new Date()
+        },
+        include: {
+          recommendedPlan: {
+            select: {
+              id: true
+            }
+          },
+          selectedPlan: {
+            select: {
+              id: true
+            }
+          }
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          tenantId: access.tenantId,
+          userId: access.userId,
+          organizationId: organization.id,
+          action: 'platform.organization_onboarding.recommended',
+          entityType: 'organization_onboarding',
+          entityId: onboardingRecord.id,
+          metadata: {
+            recommendedPlanId: recommendation.recommendedPlanId,
+            recommendedFeatureKeys: recommendation.recommendedFeatureKeys
+          }
+        }
+      });
+
+      return onboardingRecord;
+    });
+
+    return {
+      recommended: true,
+      organization: {
+        id: organization.id,
+        name: organization.name,
+        slug: organization.slug
+      },
+      onboarding: serializeOrganizationOnboarding(saved),
+      recommendedPlan: recommendedPlan ? serializePlan(recommendedPlan) : null,
+      recommendedFeatures: features
+        .filter((feature) => recommendation.recommendedFeatureKeys.includes(feature.key))
+        .map(serializeFeature),
+      ai: {
+        summary: aiNarrative.summary,
+        explanation: aiNarrative.explanation,
+        migrationRiskSummary: aiNarrative.migrationRiskSummary,
+        reviewNotes: aiNarrative.reviewNotes
+      }
+    };
+  });
+
+  app.post('/v1/platform/organizations/:organizationId/onboarding/complete', async (request, reply) => {
+    await app.authenticateRequest(request);
+    const access = requirePlatformControlPlaneAccess(requireRoutePermission(request, permissions.platformOrganizationsManage));
+    const params = organizationParamsSchema.parse(request.params);
+    const payload = onboardingCompleteSchema.parse(request.body);
+
+    const [organization, plans, features] = await Promise.all([
+      loadOrganizationForOnboarding(access.tenantId, params.organizationId),
+      loadPlanCatalog(access.tenantId),
+      loadPlatformFeaturesCatalog(access.tenantId)
+    ]);
+
+    if (!organization) {
+      return reply.code(404).send({
+        message: 'Organization was not found.'
+      });
+    }
+
+    const selectedPlan = plans.find((plan) => plan.id === payload.selectedPlanId) ?? null;
+
+    if (!selectedPlan) {
+      return reply.code(404).send({
+        message: 'Selected plan was not found.'
+      });
+    }
+
+    const answers = normalizeOnboardingAnswers(payload.answers as OrganizationOnboardingAnswers);
+    const recommendation = recommendOrganizationOnboarding({
+      plans,
+      features,
+      answers
+    });
+    const selectedFeatureKeys = sanitizeFeatureKeySelection(
+      payload.selectedFeatureKeys.filter((key) => features.some((feature) => feature.key === key))
+    );
+    const aiNarrative = aiService.generateOnboardingRecommendationNarrative({
+      tenantId: access.tenantId,
+      organizationName: answers.organizationIdentity.displayName || answers.organizationIdentity.organizationName || organization.name,
+      recommendedPlanName: selectedPlan.name,
+      recommendedFeatureNames: features
+        .filter((feature) => selectedFeatureKeys.includes(feature.key))
+        .map((feature) => feature.name),
+      reasons: recommendation.reasons,
+      importSummary: recommendation.importSummary,
+      importComplexity: recommendation.importComplexity,
+      flags: recommendation.flags,
+      adminNotes: recommendation.adminNotes
+    });
+
+    const completed = await prisma.$transaction(async (tx) => {
+      await tx.organization.update({
+        where: {
+          id: organization.id
+        },
+        data: {
+          name: answers.organizationIdentity.organizationName,
+          npi: normalizeOptionalString(answers.organizationIdentity.npi),
+          taxId: normalizeOptionalString(answers.organizationIdentity.taxId)
+        }
+      });
+
+      if (!organization.locations.length && answers.organizationIdentity.timezone) {
+        await tx.location.create({
+          data: {
+            organizationId: organization.id,
+            name: 'Primary location',
+            timezone: answers.organizationIdentity.timezone,
+            isActive: true
+          }
+        });
+      } else if (organization.locations[0] && !organization.locations[0].timezone && answers.organizationIdentity.timezone) {
+        await tx.location.update({
+          where: {
+            id: organization.locations[0].id
+          },
+          data: {
+            timezone: answers.organizationIdentity.timezone
+          }
+        });
+      }
+
+      if (organization.subscription) {
+        await tx.organizationSubscription.update({
+          where: {
+            organizationId: organization.id
+          },
+          data: {
+            planId: selectedPlan.id,
+            basePriceCents: selectedPlan.basePriceCents,
+            annualBasePriceCents: selectedPlan.annualBasePriceCents,
+            setupFeeCents: selectedPlan.setupFeeCents,
+            activeClientPriceCents: selectedPlan.activeClientPriceCents,
+            clinicianPriceCents: selectedPlan.clinicianPriceCents,
+            includedActiveClients: selectedPlan.includedActiveClients,
+            includedClinicians: selectedPlan.includedClinicians,
+            currency: selectedPlan.currency,
+            billingInterval: selectedPlan.billingInterval,
+            customPricingEnabled: selectedPlan.customPricingRequired,
+            enterpriseManaged: selectedPlan.customPricingRequired
+          }
+        });
+      } else {
+        await tx.organizationSubscription.create({
+          data: {
+            tenantId: access.tenantId,
+            organizationId: organization.id,
+            ...buildSubscriptionDataFromPlan(selectedPlan)
+          }
+        });
+      }
+
+      await syncOnboardingFeatureSelection({
+        tx,
+        tenantId: access.tenantId,
+        organizationId: organization.id,
+        userId: access.userId,
+        plan: selectedPlan,
+        features,
+        selectedFeatureKeys
+      });
+
+      const onboardingRecord = await tx.organizationOnboarding.upsert({
+        where: {
+          organizationId: organization.id
+        },
+        update: {
+          status: 'active',
+          currentStep: 'complete',
+          answers: asJson(answers),
+          recommendation: asJson(recommendation),
+          recommendedPlanId: recommendation.recommendedPlanId,
+          selectedPlanId: selectedPlan.id,
+          recommendedFeatureKeys: asJson(recommendation.recommendedFeatureKeys),
+          selectedFeatureKeys: asJson(selectedFeatureKeys),
+          requiresImport: answers.importMigration.needsDataImport || answers.operationalProfile.hasExistingDataToImport,
+          importTypes: asJson(answers.importMigration.dataTypes),
+          sourceSystem: normalizeOptionalString(answers.importMigration.sourceSystem),
+          sourceFormat: normalizeOptionalString(answers.importMigration.sourceFormat),
+          migrationAssistRequested: answers.importMigration.wantsPlatformAssistance,
+          aiSummary: aiNarrative.summary,
+          aiExplanation: aiNarrative.explanation,
+          aiMigrationRiskSummary: aiNarrative.migrationRiskSummary,
+          adminReviewNotes:
+            payload.adminReviewNotes === undefined
+              ? organization.onboarding?.adminReviewNotes ?? null
+              : normalizeOptionalString(payload.adminReviewNotes),
+          submittedAt: organization.onboarding?.submittedAt ?? new Date(),
+          reviewedAt: new Date(),
+          completedAt: new Date()
+        },
+        create: {
+          tenantId: access.tenantId,
+          organizationId: organization.id,
+          status: 'active',
+          currentStep: 'complete',
+          answers: asJson(answers),
+          recommendation: asJson(recommendation),
+          recommendedPlanId: recommendation.recommendedPlanId,
+          selectedPlanId: selectedPlan.id,
+          recommendedFeatureKeys: asJson(recommendation.recommendedFeatureKeys),
+          selectedFeatureKeys: asJson(selectedFeatureKeys),
+          requiresImport: answers.importMigration.needsDataImport || answers.operationalProfile.hasExistingDataToImport,
+          importTypes: asJson(answers.importMigration.dataTypes),
+          sourceSystem: normalizeOptionalString(answers.importMigration.sourceSystem),
+          sourceFormat: normalizeOptionalString(answers.importMigration.sourceFormat),
+          migrationAssistRequested: answers.importMigration.wantsPlatformAssistance,
+          aiSummary: aiNarrative.summary,
+          aiExplanation: aiNarrative.explanation,
+          aiMigrationRiskSummary: aiNarrative.migrationRiskSummary,
+          adminReviewNotes: normalizeOptionalString(payload.adminReviewNotes),
+          submittedAt: new Date(),
+          reviewedAt: new Date(),
+          completedAt: new Date()
+        },
+        include: {
+          recommendedPlan: {
+            select: {
+              id: true
+            }
+          },
+          selectedPlan: {
+            select: {
+              id: true
+            }
+          }
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          tenantId: access.tenantId,
+          userId: access.userId,
+          organizationId: organization.id,
+          action: 'platform.organization_onboarding.completed',
+          entityType: 'organization_onboarding',
+          entityId: onboardingRecord.id,
+          metadata: {
+            selectedPlanId: selectedPlan.id,
+            selectedFeatureKeys
+          }
+        }
+      });
+
+      return onboardingRecord;
+    });
+
+    const effectiveFeatures = await resolveEffectiveFeatures(prisma, {
+      tenantId: access.tenantId,
+      organizationId: organization.id
+    });
+
+    return {
+      completed: true,
+      organization: {
+        id: organization.id,
+        name: answers.organizationIdentity.organizationName,
+        slug: organization.slug
+      },
+      onboarding: serializeOrganizationOnboarding(completed),
+      subscription: effectiveFeatures.subscription,
+      features: effectiveFeatures.features,
+      ai: {
+        summary: aiNarrative.summary,
+        explanation: aiNarrative.explanation,
+        migrationRiskSummary: aiNarrative.migrationRiskSummary,
+        reviewNotes: aiNarrative.reviewNotes
       }
     };
   });
